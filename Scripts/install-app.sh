@@ -124,6 +124,12 @@ if ! launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Ask for the protected folders now. macOS raises its prompts on first access, and
+# an ad-hoc signed app loses its grants on every rebuild, so this has to happen on
+# each install rather than once ever.
+echo "==> checking access to protected folders"
+"$DEST_APP/Contents/MacOS/ccfinder-open" --request-access 2>/dev/null || true
+
 echo "==> first sync"
 "$DEST_APP/Contents/Resources/ccfinder" sync
 

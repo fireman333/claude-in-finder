@@ -18,7 +18,8 @@ Sessions live next to the work they belong to:
 - **Space bar** → Quick Look shows the actual conversation.
 - **Rename a session in Claude** → the file renames itself, keeping its Finder tags.
 - **`+ New Session`** → starts a fresh session in that project, skipping the New screen.
-- **Delete a session file** → the session is archived (or deleted — your choice).
+- **Delete a session file** → the session is archived. Delete it again from
+  `Archive/` → the session is deleted for real.
 - **Right-click any folder** → Services → *New Claude Session Here*, *Open Claude
   Archive Folder*, *Claude in Finder Settings…*.
 - **Right-click a session** → Services → *Archive* or *Delete*.
@@ -71,7 +72,7 @@ Three ways in, whichever is nearest:
 |---|---|
 | Where session files are kept | in each working folder · all together under `~/Claude Sessions` |
 | Show the Archive folder | visible · hidden (the files stay; open it from the right-click menu) |
-| Deleting a session file in Finder | archives the session · deletes it |
+| Deleting a session file | archives the session · deletes it (from `Archive/` it always deletes) |
 
 Or from the command line:
 
@@ -90,6 +91,11 @@ Hiding the Archive folder sets its hidden flag rather than dropping the files, s
 the archived sessions are still there and **Open Claude Archive Folder** can reach
 them.
 
+Deleting works in two stages, like the Trash itself: removing a session from its
+folder archives it, and removing it from `Archive/` — where it has already been
+put aside once — deletes it. That second step is deliberate enough to take at face
+value, whatever the setting says.
+
 A session file that is gone from its folder counts as deleted, whether or not it
 left a copy in the Trash — Finder does not always leave one, and the sync agent
 may replace the file before it ever sees one. The check happens at the moment the
@@ -105,17 +111,22 @@ Two guards keep that from going wrong:
   does not look, so an unconfirmed disappearance is downgraded to archiving — a
   nuisance you undo by dragging it back, rather than something you cannot.
 
-## Full Disk Access
+## Access to protected folders
 
-macOS protects Desktop, Documents and Downloads. A launchd agent cannot answer the
-consent prompt those folders trigger, so **grant Full Disk Access to
-"Claude in Finder"** in System Settings → Privacy & Security → Full Disk Access if
-your sessions run in any of them.
+macOS protects Desktop, Documents and Downloads. The installer asks for them, so
+answering its prompts is usually all there is to it.
+
+**You will be asked again after every update.** The app is ad-hoc signed, which
+means its identity *is* its code hash, so a new build is a different app as far as
+macOS is concerned and the old grant no longer applies. A Developer ID certificate
+would fix that; a hobby project does not warrant one.
 
 Without it nothing breaks: the agent notices a folder is not answering, skips that
-whole tree, logs it, and keeps going. `ccfinder doctor` lists what it could not
-read. Running `ccfinder sync` from your own terminal also works, because your
-terminal already has access.
+whole tree, logs it, and keeps going — and refuses to read anything into a folder
+it cannot see, so a blocked folder is never mistaken for one whose sessions were
+all deleted. `ccfinder doctor` lists what it could not read. Running `ccfinder
+sync` from your own terminal works regardless, because your terminal has its own
+access.
 
 ## Usage
 

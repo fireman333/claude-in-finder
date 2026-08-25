@@ -119,7 +119,9 @@ public struct Mirror {
             // after which it never looks deleted again.
             if let previous = index.entries[session.desktopID],
                vanished(entry: previous, id: session.desktopID, scan: scan) {
-                switch effectiveDeleteAction(for: session.desktopID, scan: scan) {
+                switch effectiveDeleteAction(for: session.desktopID,
+                                             wasIn: previous.path,
+                                             scan: scan) {
                 case .archive:
                     if !session.isArchived {
                         try? SessionStore.archive(desktopID: session.desktopID, archived: true)
@@ -435,14 +437,21 @@ public struct Mirror {
         return scan.listed.contains(parent)
     }
 
-    /// Deleting the session outright needs proof — the file actually in the Trash.
+    /// What a session file disappearing should mean, given where it disappeared from.
     ///
-    /// A file that is merely gone might have been dragged somewhere we do not look.
-    /// Archiving that is a nuisance you can undo by dragging it back; deleting it
-    /// is not, so an unconfirmed disappearance is always downgraded to archiving.
-    private func effectiveDeleteAction(for id: String,
+    /// Deleting works in two stages, like the Trash itself: removing a session from
+    /// its folder archives it, and removing it from Archive — where it has already
+    /// been put aside once — deletes it. That second step is deliberate enough to
+    /// take at face value.
+    ///
+    /// Elsewhere, deleting the session outright needs proof: the file actually in
+    /// the Trash. Something that merely went missing might have been dragged
+    /// somewhere we do not look. Archiving that is a nuisance you undo by dragging
+    /// it back; deleting it is not, so an unconfirmed disappearance is downgraded.
+    private func effectiveDeleteAction(for id: String, wasIn path: String,
                                        scan: (found: [String: URL], listed: Set<String>))
         -> Config.DeleteAction {
+        if Self.isInArchive(path) { return .delete }
         guard onFinderDelete == .delete else { return .archive }
         if trashedSessionIDs().contains(id) { return .delete }
         log("\(id) is gone but not in the Trash — archiving instead of deleting")

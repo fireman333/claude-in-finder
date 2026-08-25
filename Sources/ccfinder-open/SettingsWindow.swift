@@ -61,14 +61,15 @@ final class SettingsWindowController: NSWindowController {
         archiveHelp.lineBreakMode = .byWordWrapping
         archiveHelp.usesSingleLineMode = false
 
-        let deleteTitle = label("Deleting a session file in Finder", size: 13, weight: .medium)
+        let deleteTitle = label("Deleting a session file from its folder", size: 13, weight: .medium)
         deletePopUp = NSPopUpButton()
         deletePopUp.addItems(withTitles: ["Archives the session", "Deletes the session"])
         deletePopUp.target = self
         deletePopUp.action = #selector(deleteActionChanged)
         let deleteHelp = label(
-            "Archiving keeps the conversation; deleting removes it from Claude's list "
-                + "and backs the record up, leaving the transcript itself alone.",
+            "Deleting a file from inside Archive always deletes the session — it has "
+                + "already been put aside once. This is about everywhere else. Either "
+                + "way the transcript is left alone and the record is backed up.",
             size: 11, weight: .regular, secondary: true)
         deleteHelp.lineBreakMode = .byWordWrapping
         deleteHelp.usesSingleLineMode = false

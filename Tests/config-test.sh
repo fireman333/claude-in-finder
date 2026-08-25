@@ -90,17 +90,26 @@ mv "$WORKDIR/Claude Sessions/Archive/Live one.claudesession" "$CCF_TRASH/"
 [ -f "$CCF_SESSIONS/deleted_11111111-1111-1111-1111-111111111111" ] || fail "no tombstone written"
 [ -f "$CCF_SUPPORT/deleted/local_11111111-1111-1111-1111-111111111111.json" ] || fail "no backup kept"
 
-echo "10. a file that vanished without reaching the Trash is archived, never deleted"
+echo "10. a live file that vanished without reaching the Trash is archived, never deleted"
 #     it may have been dragged somewhere we do not look; archiving is undoable
 "$CCFINDER" config on-delete delete >/dev/null
-OTHER="$TMP/moved-away"; mkdir -p "$OTHER"
-mv "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" "$OTHER/"
+cat > "$CCF_SESSIONS/local_44444444-4444-4444-4444-444444444444.json" <<JSON
+{"sessionId":"local_44444444-4444-4444-4444-444444444444",
+ "cliSessionId":"44444444-4444-4444-4444-444444444444","cwd":"$WORKDIR",
+ "title":"Fourth one","titleSource":"user","isArchived":false,
+ "createdAt":1780000000000,"lastActivityAt":1780000004000}
+JSON
 "$CCFINDER" sync >/dev/null
-REC2="$CCF_SESSIONS/local_22222222-2222-2222-2222-222222222222.json"
-[ -f "$REC2" ] || fail "an unconfirmed disappearance deleted the session"
+FOURTH="$WORKDIR/Claude Sessions/Fourth one.claudesession"
+[ -f "$FOURTH" ] || fail "setup: Fourth one not mirrored"
+OTHER="$TMP/moved-away"; mkdir -p "$OTHER"
+mv "$FOURTH" "$OTHER/"
+"$CCFINDER" sync >/dev/null
+REC4="$CCF_SESSIONS/local_44444444-4444-4444-4444-444444444444.json"
+[ -f "$REC4" ] || fail "an unconfirmed disappearance deleted the session"
 python3 -c "
 import json,sys
-sys.exit(0 if json.load(open('$REC2')).get('isArchived') is True else 1)" \
+sys.exit(0 if json.load(open('$REC4')).get('isArchived') is True else 1)" \
   || fail "it should have been archived instead"
 
 echo "11. deleting without the Trash still archives (the common real case)"
@@ -128,6 +137,18 @@ sys.exit(0 if d.get('isArchived') is True else 1)" || fail "a plain removal did 
 [ -f "$WORKDIR/Claude Sessions/Archive/Third one.claudesession" ] \
   || fail "it should have reappeared under Archive/"
 [ ! -f "$THIRD" ] || fail "it was recreated in the live folder instead"
+
+echo "12. deleting from inside Archive deletes for real, whatever the setting says"
+"$CCFINDER" config on-delete archive >/dev/null      # the cautious setting
+ARCHIVED="$WORKDIR/Claude Sessions/Archive/Third one.claudesession"
+[ -f "$ARCHIVED" ] || fail "setup: Third one not in Archive"
+rm "$ARCHIVED"
+"$CCFINDER" sync >/dev/null
+[ ! -f "$CCF_SESSIONS/local_33333333-3333-3333-3333-333333333333.json" ] \
+  || fail "deleting from Archive did not delete the session"
+[ -f "$CCF_SESSIONS/deleted_33333333-3333-3333-3333-333333333333" ] || fail "no tombstone"
+[ -f "$CCF_SUPPORT/deleted/local_33333333-3333-3333-3333-333333333333.json" ] || fail "no backup"
+[ ! -f "$ARCHIVED" ] || fail "the file came back"
 
 echo
 echo "PASS — settings take effect immediately, hiding keeps the files,"

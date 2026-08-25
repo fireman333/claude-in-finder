@@ -263,7 +263,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // file access per code identity, and a loose executable has none. Launched this
 // way the process carries the app bundle's identity, so access to places like the
 // Desktop follows the app — and can be granted in System Settings if it is not.
-if CommandLine.arguments.contains("--watch") {
+if CommandLine.arguments.contains("--request-access") {
+    // Touch the folders macOS protects so it raises its consent prompts now, while
+    // the user is still at the keyboard, instead of at some later moment when the
+    // background agent quietly finds a folder it cannot read.
+    //
+    // This is needed after every update: the app is ad-hoc signed, so its identity
+    // is its code hash, and a rebuild is a different app as far as TCC is concerned.
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    var blocked: [String] = []
+    for name in ["Desktop", "Documents", "Downloads"] {
+        let dir = home.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: dir.path) else { continue }
+        if (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) == nil {
+            blocked.append(name)
+        }
+    }
+    if !blocked.isEmpty {
+        let alert = NSAlert()
+        alert.messageText = "Claude in Finder needs access to \(blocked.joined(separator: ", "))"
+        alert.informativeText = """
+        Sessions that live in those folders cannot be synced until access is granted.
+
+        Open System Settings → Privacy & Security → Files and Folders (or Full Disk \
+        Access) and allow Claude in Finder, then run the installer again.
+
+        Everything else keeps working in the meantime.
+        """
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Later")
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    exit(0)
+} else if CommandLine.arguments.contains("--watch") {
     // Run as an accessory app rather than a bare tool: it needs a menu bar item,
     // which is the only place settings can be opened from in an app with no Dock
     // icon. The watcher itself runs off the main thread so the UI stays live.

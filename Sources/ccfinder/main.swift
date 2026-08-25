@@ -157,7 +157,8 @@ case "config":
           ccfinder config                        show current settings
           ccfinder config layout workdir|central where session files are kept
           ccfinder config archive show|hide      whether the Archive folder is visible
-          ccfinder config on-delete archive|delete  what deleting a file in Finder means
+          ccfinder config on-delete archive|delete  what deleting a file means
+                                                 (from Archive it always deletes)
 
         """.utf8))
         exit(2)
