@@ -23,6 +23,19 @@ Requires macOS 13+, Claude Desktop, and the Command Line Tools. **No Xcode neede
 
 ## Install
 
+Download the `.dmg` from [Releases](https://github.com/fireman333/claude-in-finder/releases),
+open it, and run this one line in Terminal:
+
+```bash
+bash "/Volumes/Claude in Finder/install.sh"
+```
+
+The app is ad-hoc signed and not notarised, so macOS blocks it if you open it the
+usual way. Running the installer through `bash` gets around that, and the
+installer clears the quarantine flag on its own copy.
+
+Or build it yourself:
+
 ```bash
 git clone https://github.com/fireman333/claude-in-finder.git
 cd claude-in-finder
@@ -95,7 +108,10 @@ that.
 ## Tests
 
 ```bash
-./Tests/rename-test.sh   # rename preserves the inode and extended attributes
+./Tests/run-all.sh       # everything
+
+./Tests/rename-test.sh   # rename preserves the inode and extended attributes;
+                         # archiving prunes; a lost index rebuilds itself
 ./Tests/watch-test.sh    # FSEvents picks up creation and retitling live
 ```
 
