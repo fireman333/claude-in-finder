@@ -9,9 +9,9 @@ USAGE
   ccfinder watch [options]                       stay running and sync on change
   ccfinder open <file.claudesession> [--dry-run] resume (or start) the session a file points at
   ccfinder new [folder] [--dry-run]              start a new session in a folder
-  ccfinder archive <file.claudesession>          archive the session (reversible)
-  ccfinder unarchive <file.claudesession>        bring an archived session back
-  ccfinder delete <file.claudesession> --yes     delete the session record
+  ccfinder archive <file...>                     archive one or more sessions (reversible)
+  ccfinder unarchive <file...>                   bring archived sessions back
+  ccfinder delete <file...> --yes                delete session records
   ccfinder config [layout|archive] [value]       show or change settings
   ccfinder doctor                                report what it can and cannot see
 
@@ -91,47 +91,59 @@ case "new":
     RunLoop.main.run()
 
 case "archive", "unarchive":
-    guard let path = positional.first else {
-        FileHandle.standardError.write(Data("ccfinder \(command): need a .claudesession file\n".utf8))
+    guard !positional.isEmpty else {
+        FileHandle.standardError.write(Data("ccfinder \(command): need one or more .claudesession files\n".utf8))
         exit(2)
     }
-    let file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-    guard let id = SessionFile.meta(in: file)["claude-desktop-id"], !id.isEmpty else {
-        FileHandle.standardError.write(Data("ccfinder \(command): \(file.lastPathComponent) is not a session file\n".utf8))
-        exit(3)
+    let archiving = command == "archive"
+    var archiveFailures = 0
+    for path in positional {
+        let file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        guard let id = SessionFile.meta(in: file)["claude-desktop-id"], !id.isEmpty else {
+            FileHandle.standardError.write(Data("skipped \(file.lastPathComponent): not a session file\n".utf8))
+            archiveFailures += 1
+            continue
+        }
+        do {
+            try SessionStore.archive(desktopID: id, archived: archiving)
+            SessionStore.moveMirrorFile(file, intoArchive: archiving)
+            print("\(archiving ? "archived" : "unarchived"): \(SessionStore.title(desktopID: id) ?? id)")
+        } catch {
+            FileHandle.standardError.write(Data("\(file.lastPathComponent): \(error.localizedDescription)\n".utf8))
+            archiveFailures += 1
+        }
     }
-    do {
-        try SessionStore.archive(desktopID: id, archived: command == "archive")
-        print("\(command == "archive" ? "archived" : "unarchived"): \(SessionStore.title(desktopID: id) ?? id)")
-    } catch {
-        FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
-        exit(1)
-    }
+    if archiveFailures > 0 { exit(1) }
 
 case "delete":
-    guard let path = positional.first else {
-        FileHandle.standardError.write(Data("ccfinder delete: need a .claudesession file\n".utf8))
+    guard !positional.isEmpty else {
+        FileHandle.standardError.write(Data("ccfinder delete: need one or more .claudesession files\n".utf8))
         exit(2)
     }
     guard args.contains("--yes") else {
         FileHandle.standardError.write(Data("ccfinder delete: refusing without --yes\n".utf8))
         exit(2)
     }
-    let file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-    guard let id = SessionFile.meta(in: file)["claude-desktop-id"], !id.isEmpty else {
-        FileHandle.standardError.write(Data("ccfinder delete: \(file.lastPathComponent) is not a session file\n".utf8))
-        exit(3)
+    var deleteFailures = 0
+    for path in positional {
+        let file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        guard let id = SessionFile.meta(in: file)["claude-desktop-id"], !id.isEmpty else {
+            FileHandle.standardError.write(Data("skipped \(file.lastPathComponent): not a session file\n".utf8))
+            deleteFailures += 1
+            continue
+        }
+        let name = SessionStore.title(desktopID: id) ?? id
+        do {
+            try SessionStore.delete(desktopID: id)
+            try? FileManager.default.removeItem(at: file)
+            print("deleted: \(name)")
+        } catch {
+            FileHandle.standardError.write(Data("\(name): \(error.localizedDescription)\n".utf8))
+            deleteFailures += 1
+        }
     }
-    let name = SessionStore.title(desktopID: id) ?? id
-    do {
-        try SessionStore.delete(desktopID: id)
-        try? FileManager.default.removeItem(at: file)
-        print("deleted: \(name)")
-        print("the transcript is untouched; the record was backed up to \(SessionStore.backupDir.path)")
-    } catch {
-        FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
-        exit(1)
-    }
+    print("transcripts are untouched; records were backed up to \(SessionStore.backupDir.path)")
+    if deleteFailures > 0 { exit(1) }
 
 case "config":
     var config = Config.load()
@@ -172,8 +184,8 @@ case "config":
     // Apply it straight away rather than waiting for the agent to notice.
     print("")
     let updated = Mirror.fromConfig(verbose: verbose)
-    if let s = try? updated.reconcile() {
-        print("moved \(s.renamed), created \(s.created), removed \(s.removed)")
+    if let stats = try? updated.reconcile() {
+        print("moved \(stats.renamed), created \(stats.created), removed \(stats.removed)")
     }
 
 case "doctor":

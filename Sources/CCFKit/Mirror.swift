@@ -16,7 +16,7 @@ public struct Mirror {
     /// Name of the per-project folder dropped inside each working directory.
     static let folderName = SessionFile.mirrorFolderName
     /// Sessions archived in Claude are kept, but tucked one level down.
-    static let archiveFolderName = "Archive"
+    static let archiveFolderName = SessionStore.archiveFolderName
 
     struct Entry: Codable {
         var path: String      // absolute since v2; relative to the mirror root in v1
@@ -271,7 +271,7 @@ public struct Mirror {
         let name = (cwd as NSString).lastPathComponent
         return """
         <!doctype html>
-        <html lang="zh-Hant">
+        <html lang="en">
         <head>
         <meta charset="utf-8">
         <meta name="claude-action" content="new">
@@ -287,9 +287,9 @@ public struct Mirror {
         </style>
         </head>
         <body>
-          <div class="plus">＋</div>
-          <div>在 <strong>\(Render.esc(name))</strong> 開新的 Claude Code 對話</div>
-          <div class="sub">雙擊這個檔案</div>
+          <div class="plus">+</div>
+          <div>New Claude Code session in <strong>\(Render.esc(name))</strong></div>
+          <div class="sub">double-click this file</div>
         </body>
         </html>
         """

@@ -12,21 +12,43 @@ import CCFKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var handled = false
+    private var idleExit: DispatchWorkItem?
+    private var settings: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
 
-        // Opened with no document (e.g. from Spotlight): just reveal the mirror.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        // Opened with no document (from Spotlight, or the app icon): show settings.
+        // The wait has to outlast a cold launch — a service message can arrive well
+        // after didFinishLaunching, and quitting first made the menu item look dead.
+        let exit = DispatchWorkItem { [weak self] in
             guard let self, !self.handled else { return }
-            NSWorkspace.shared.open(Paths.mirror)
-            NSApp.terminate(nil)
+            self.claim()
+            self.showSettings()
         }
+        idleExit = exit
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: exit)
+    }
+
+    private func showSettings() {
+        NSApp.setActivationPolicy(.regular)
+        let controller = SettingsWindowController()
+        settings = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Called by every entry point the moment it takes charge.
+    private func claim() {
+        handled = true
+        idleExit?.cancel()
+        idleExit = nil
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        handled = true
+        claim()
         Task {
             for url in urls {
                 if let link = SessionFile.deepLink(for: url) {
@@ -46,14 +68,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func newSessionHere(_ pboard: NSPasteboard,
                               userData: String,
                               error: AutoreleasingUnsafeMutablePointer<NSString>) {
-        handled = true
+        claim()
         guard let folder = Self.folder(from: pboard) else {
-            error.pointee = "找不到可用的資料夾" as NSString
+            error.pointee = "No usable folder in the selection." as NSString
             NSApp.terminate(nil)
             return
         }
         guard let link = SessionFile.newSessionLink(cwd: folder) else {
-            error.pointee = "無法組出 claude:// 連結" as NSString
+            error.pointee = "Could not build the claude:// link." as NSString
             NSApp.terminate(nil)
             return
         }
@@ -69,14 +91,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func archiveSession(_ pboard: NSPasteboard,
                               userData: String,
                               error: AutoreleasingUnsafeMutablePointer<NSString>) {
-        handled = true
+        claim()
         act(on: pboard, error: error, verb: "archive")
     }
 
     @objc func deleteSession(_ pboard: NSPasteboard,
                              userData: String,
                              error: AutoreleasingUnsafeMutablePointer<NSString>) {
-        handled = true
+        claim()
         act(on: pboard, error: error, verb: "delete")
     }
 
@@ -87,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                      verb: String) {
         let files = Self.sessionFiles(from: pboard)
         guard !files.isEmpty else {
-            error.pointee = "沒有選到 session 檔案" as NSString
+            error.pointee = "No session files were selected." as NSString
             NSApp.terminate(nil)
             return
         }
@@ -97,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (url, id)
         }
         guard !targets.isEmpty else {
-            error.pointee = "選到的檔案不是 session（「+ New Session」不能封存或刪除）" as NSString
+            error.pointee = "That is not a session file — \"+ New Session\" cannot be archived or deleted." as NSString
             NSApp.terminate(nil)
             return
         }
@@ -112,12 +134,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 if verb == "archive" {
                     try SessionStore.archive(desktopID: target.id)
+                    // Move it now rather than leaving a gap until the agent catches
+                    // up: the folder should reflect the click immediately.
+                    SessionStore.moveMirrorFile(target.url, intoArchive: true)
                 } else {
                     try SessionStore.delete(desktopID: target.id)
+                    // Recycle, not unlink: the file goes to the Trash.
+                    NSWorkspace.shared.recycle([target.url])
                 }
-                // Give immediate feedback rather than waiting on the sync agent.
-                // Recycle, not unlink: the file goes to the Trash.
-                NSWorkspace.shared.recycle([target.url])
             } catch {
                 failures.append(error.localizedDescription)
             }
@@ -133,31 +157,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func confirm(verb: String, targets: [(url: URL, id: String)]) -> Bool {
         let names = targets.prefix(5).map { SessionStore.title(desktopID: $0.id) ?? $0.url.lastPathComponent }
         var list = names.joined(separator: "\n")
-        if targets.count > names.count { list += "\n⋯ 以及另外 \(targets.count - names.count) 個" }
+        if targets.count > names.count { list += "\n… and \(targets.count - names.count) more" }
 
         let alert = NSAlert()
         alert.alertStyle = verb == "delete" ? .critical : .warning
         if verb == "archive" {
-            alert.messageText = targets.count == 1 ? "封存這個 session？" : "封存這 \(targets.count) 個 session？"
+            alert.messageText = targets.count == 1 ? "Archive this session?" : "Archive these \(targets.count) sessions?"
             alert.informativeText = """
             \(list)
 
-            封存後會從 Claude 的清單和這個資料夾裡消失，對話內容不會被刪除。
-            隨時可以用 ccfinder unarchive 還原。
+            It moves into the Archive folder and leaves Claude's session list.
+            Nothing is deleted; drag it back out to unarchive.
             """
-            alert.addButton(withTitle: "封存")
+            alert.addButton(withTitle: "Archive")
         } else {
-            alert.messageText = targets.count == 1 ? "刪除這個 session？" : "刪除這 \(targets.count) 個 session？"
+            alert.messageText = targets.count == 1 ? "Delete this session?" : "Delete these \(targets.count) sessions?"
             alert.informativeText = """
             \(list)
 
-            會從 Claude 的 session 清單移除，檔案移到垃圾桶。
-            對話本身（~/.claude/projects 的 transcript）不會被刪除，
-            session 記錄也會先備份到 ClaudeInFinder/deleted。
+            It leaves Claude's session list and the file goes to the Trash.
+            The conversation itself — the transcript under ~/.claude/projects —
+            is not deleted, and the session record is backed up first.
             """
-            alert.addButton(withTitle: "刪除")
+            alert.addButton(withTitle: "Delete")
         }
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "Cancel")
 
         NSApp.activate(ignoringOtherApps: true)
         return alert.runModal() == .alertFirstButtonReturn
@@ -188,12 +212,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static func complain(about url: URL) {
         let alert = NSAlert()
-        alert.messageText = "打不開這個 session"
+        alert.messageText = "Cannot open this session"
         alert.informativeText = """
-        \(url.lastPathComponent) 裡沒有可用的 session id。
+        \(url.lastPathComponent) carries no session id.
 
-        這個檔案可能是舊版產生的，或對應的 session 已被刪除。
-        執行 `ccfinder sync` 重新產生一次。
+        It may have been written by an older version, or the session it pointed
+        at was deleted. Run `ccfinder sync` to regenerate it.
         """
         alert.alertStyle = .warning
         alert.runModal()

@@ -80,6 +80,38 @@ public enum SessionStore {
         try fm.removeItem(at: url)
     }
 
+    /// Moves a mirrored file into or out of its Archive folder immediately.
+    ///
+    /// The sync agent would get there on its own, but not for a few seconds, and
+    /// in the meantime the file has vanished from where the user was looking. Doing
+    /// the move here means the folder reflects the click at once; the agent's next
+    /// pass simply agrees with what it finds.
+    @discardableResult
+    public static func moveMirrorFile(_ url: URL, intoArchive: Bool) -> URL? {
+        let fm = FileManager.default
+        let parent = url.deletingLastPathComponent()
+        let inArchive = parent.lastPathComponent == archiveFolderName
+
+        guard inArchive != intoArchive else { return url }
+
+        let destDir = intoArchive
+            ? parent.appendingPathComponent(archiveFolderName)
+            : parent.deletingLastPathComponent()
+        let dest = destDir.appendingPathComponent(url.lastPathComponent)
+
+        do {
+            try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            try fm.moveItem(at: url, to: dest)
+            return dest
+        } catch {
+            return nil
+        }
+    }
+
+    /// Kept in step with Mirror.archiveFolderName.
+    public static let archiveFolderName = "Archive"
+
     private static func bareUUID(_ id: String) -> String {
         id.hasPrefix("local_") ? String(id.dropFirst("local_".count)) : id
     }

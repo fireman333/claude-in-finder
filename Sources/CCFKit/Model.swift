@@ -52,14 +52,14 @@ struct JSONBag {
 
 // MARK: - Session
 
-struct Session {
+public struct Session {
     let desktopID: String        // "local_<uuid>"
     let cliSessionID: String?    // the UUID accepted by claude://resume?session=
     let bridgeIDs: [String]
     let cwd: String
     let title: String
     let titleSource: String?     // "user" | "auto" | nil
-    let isArchived: Bool
+    public let isArchived: Bool
     let createdAt: Date?
     let lastActivityAt: Date?
     let model: String?
@@ -90,9 +90,9 @@ struct Session {
 
 // MARK: - Discovery
 
-enum Discovery {
+public enum Discovery {
     /// All non-deleted desktop session records.
-    static func sessions() -> [Session] {
+    public static func sessions() -> [Session] {
         let fm = FileManager.default
         guard let walker = fm.enumerator(
             at: Paths.desktopSessions,

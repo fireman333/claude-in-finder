@@ -59,6 +59,10 @@ Everything lands under your home directory — `~/Applications`, `~/.local/bin`,
 
 ## Settings
 
+Open the app itself — from Spotlight, or the **Open Claude Sessions** button's
+window — for a settings panel: where session files are kept, and whether the
+Archive folder is shown. Or from the command line:
+
 ```bash
 ccfinder config                     # show current settings
 ccfinder config layout workdir      # a Claude Sessions folder in each working directory
@@ -107,6 +111,9 @@ Useful flags for `sync` and `watch`:
 `CCF_MIRROR` moves the fallback root away from `~/Claude Sessions`.
 
 ## Archiving and deleting
+
+Several sessions can be selected at once; you are asked to confirm the batch once,
+and the files move immediately rather than after the next sync.
 
 Both act on Claude's own session records, following the conventions read out of
 the app: archiving flips `isArchived`, deleting writes the `deleted_<uuid>`
@@ -192,6 +199,7 @@ through the same resolver.
 ./Tests/archive-delete-test.sh # archive/delete against Claude's record format,
                               # and dragging in and out of Archive/
 ./Tests/config-test.sh        # both settings, including flag overrides
+./Tests/multi-select-test.sh  # batch archive / unarchive / delete
 ```
 
 Both run against a synthetic session directory via `CCF_SESSIONS`, so they never

@@ -15,7 +15,7 @@ enum Render {
     static func html(for session: Session, transcript: URL?) -> String {
         let messages = transcript.map { parse(jsonl: $0) } ?? []
         let body = messages.isEmpty
-            ? "<p class=\"empty\">這個 session 還沒有可顯示的訊息，或 transcript 已被移除。</p>"
+            ? "<p class=\"empty\">No messages to show — the transcript may have been removed.</p>"
             : messages.map(renderMessage).joined()
 
         let meta = """
@@ -33,12 +33,12 @@ enum Render {
 
         let openable = session.cliSessionID != nil
         let hint = openable
-            ? "雙擊此檔可在 Claude Code desktop 開啟這個對話"
-            : "⚠️ 這個 session 沒有 CLI transcript id，無法用 deep link 開啟"
+            ? "Double-click to reopen this conversation in Claude Code desktop"
+            : "This session has no CLI transcript id and cannot be reopened by deep link"
 
         return """
         <!doctype html>
-        <html lang="zh-Hant">
+        <html lang="en">
         <head>
         \(meta)
         <title>\(esc(session.title))</title>
@@ -131,7 +131,7 @@ enum Render {
         let toolHTML = uniqueTools.isEmpty ? "" :
             "<div class=\"tools\">" + uniqueTools.map { "<code>\(esc($0))</code>" }.joined() + "</div>"
         let bodyHTML = text.isEmpty ? "" : "<div class=\"text\">\(esc(text))</div>"
-        let label = m.role == "user" ? "你" : "Claude"
+        let label = m.role == "user" ? "You" : "Claude"
         return """
         <article class="msg \(m.role)">
           <div class="role">\(label)</div>
