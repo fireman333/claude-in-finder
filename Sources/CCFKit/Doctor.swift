@@ -94,7 +94,6 @@ public enum Doctor {
             ("Archive Claude Session", "archiveSession"),
             ("Delete Claude Session", "deleteSession"),
             ("Open Claude Archive Folder", "openArchiveFolder"),
-            ("Claude in Finder Settings\u{2026}", "openSettingsService"),
         ]
         let prefs = Paths.home.appendingPathComponent("Library/Preferences/pbs.plist")
         guard let data = try? Data(contentsOf: prefs),

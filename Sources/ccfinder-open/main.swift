@@ -86,16 +86,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Settings, reachable from any folder's contextual menu. The app has no Dock
-    /// icon and quits as soon as it is done, so without an entry point like this
-    /// there is nowhere to open it from.
-    @objc func openSettingsService(_ pboard: NSPasteboard,
-                                   userData: String,
-                                   error: AutoreleasingUnsafeMutablePointer<NSString>) {
-        claim()
-        showSettings()
-    }
-
     /// Opens the Archive folder for whatever was right-clicked — the point of
     /// hiding it rather than not creating it.
     @objc func openArchiveFolder(_ pboard: NSPasteboard,
@@ -327,7 +317,7 @@ final class AgentDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.servicesProvider = services
 
-        let watcher = Watcher(mirror: Mirror.fromConfig())
+        let watcher = Watcher(mirror: { Mirror.fromConfig() })
         self.watcher = watcher
         statusItem = StatusItemController { watcher.syncNow() }
 

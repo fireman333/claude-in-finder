@@ -89,11 +89,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>NSMessage</key><string>newSessionHere</string>
       <key>NSPortName</key><string>$APP_NAME</string>
       <key>NSSendFileTypes</key><array><string>public.folder</string></array>
-      <key>NSSendTypes</key>
-      <array>
-        <string>NSFilenamesPboardType</string>
-        <string>public.file-url</string>
-      </array>
     </dict>
     <dict>
       <key>NSMenuItem</key>
@@ -101,27 +96,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>NSMessage</key><string>openArchiveFolder</string>
       <key>NSPortName</key><string>$APP_NAME</string>
       <key>NSSendFileTypes</key><array><string>public.folder</string></array>
-      <key>NSSendTypes</key>
-      <array>
-        <string>NSFilenamesPboardType</string>
-        <string>public.file-url</string>
-      </array>
-    </dict>
-    <dict>
-      <key>NSMenuItem</key>
-      <dict><key>default</key><string>Claude in Finder Settings…</string></dict>
-      <key>NSMessage</key><string>openSettingsService</string>
-      <key>NSPortName</key><string>$APP_NAME</string>
-      <key>NSSendFileTypes</key>
-      <array>
-        <string>public.folder</string>
-        <string>$UTI</string>
-      </array>
-      <key>NSSendTypes</key>
-      <array>
-        <string>NSFilenamesPboardType</string>
-        <string>public.file-url</string>
-      </array>
     </dict>
     <dict>
       <key>NSMenuItem</key>
@@ -129,11 +103,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>NSMessage</key><string>archiveSession</string>
       <key>NSPortName</key><string>$APP_NAME</string>
       <key>NSSendFileTypes</key><array><string>$UTI</string></array>
-      <key>NSSendTypes</key>
-      <array>
-        <string>NSFilenamesPboardType</string>
-        <string>public.file-url</string>
-      </array>
     </dict>
     <dict>
       <key>NSMenuItem</key>
@@ -141,11 +110,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>NSMessage</key><string>deleteSession</string>
       <key>NSPortName</key><string>$APP_NAME</string>
       <key>NSSendFileTypes</key><array><string>$UTI</string></array>
-      <key>NSSendTypes</key>
-      <array>
-        <string>NSFilenamesPboardType</string>
-        <string>public.file-url</string>
-      </array>
     </dict>
   </array>
 </dict>

@@ -43,6 +43,25 @@ public struct Mirror {
     public var onFinderDelete: Config.DeleteAction = .archive
 
     let fm = FileManager.default
+    /// A whole-file lock held for the duration of a reconcile.
+    private final class ReconcileLock {
+        private var fd: Int32 = -1
+
+        func acquire() {
+            let path = Paths.support.appendingPathComponent("reconcile.lock").path
+            fd = open(path, O_CREAT | O_RDWR, 0o644)
+            guard fd >= 0 else { return }
+            flock(fd, LOCK_EX)
+        }
+
+        func release() {
+            guard fd >= 0 else { return }
+            flock(fd, LOCK_UN)
+            close(fd)
+            fd = -1
+        }
+    }
+
     /// Scanned at most once per reconcile.
     private let trashBox = TrashBox()
     private final class TrashBox: @unchecked Sendable { var ids: Set<String>? }
@@ -88,6 +107,14 @@ public struct Mirror {
     public func reconcile() throws -> (created: Int, renamed: Int, updated: Int, removed: Int) {
         try fm.createDirectory(at: Paths.support, withIntermediateDirectories: true)
 
+        // Only one reconcile at a time, across every process. Two of them running
+        // together — the agent and a settings change, say — each see files the
+        // other is midway through moving, and "missing" is exactly what this pass
+        // reads as "the user deleted it".
+        let lock = ReconcileLock()
+        lock.acquire()
+        defer { lock.release() }
+
         trashCache = nil
         var index = loadIndex()
         var sessions = Discovery.sessions()
@@ -126,11 +153,12 @@ public struct Mirror {
                     if !session.isArchived {
                         try? SessionStore.archive(desktopID: session.desktopID, archived: true)
                         session.isArchived = true
-                        log("archived (file deleted in Finder): \(session.title)")
+                        // Always logged, verbose or not: this changes Claude's data.
+                        Log.line("archived (file deleted in Finder): \(session.title)")
                     }
                 case .delete:
                     try? SessionStore.delete(desktopID: session.desktopID)
-                    log("deleted (file deleted in Finder): \(session.title)")
+                    Log.line("deleted (file deleted in Finder): \(session.title)")
                     deleted.insert(session.desktopID)
                     index.entries.removeValue(forKey: session.desktopID)
                     continue
@@ -413,7 +441,7 @@ public struct Mirror {
 
             do {
                 try SessionStore.archive(desktopID: id, archived: now)
-                log("\(now ? "archived" : "unarchived") by drag: \(current.lastPathComponent)")
+                Log.line("\(now ? "archived" : "unarchived") by drag: \(current.lastPathComponent)")
             } catch {
                 log("drag intent failed for \(id): \(error.localizedDescription)")
             }

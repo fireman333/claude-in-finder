@@ -60,7 +60,19 @@ case "sync":
     }
 
 case "watch":
-    Watcher(mirror: mirror).run()
+    // Rebuild per pass so a settings change is picked up without a restart; the
+    // flags given on this command line still win each time.
+    let forceCentral = args.contains("--central")
+    let noGitExclude = args.contains("--no-git-exclude")
+    Watcher(mirror: {
+        Mirror.fromConfig(
+            forceCentral: forceCentral,
+            forceSkipArchived: skipArchived,
+            prune: prune,
+            gitExclude: !noGitExclude,
+            verbose: verbose
+        )
+    }).run()
 
 case "open":
     guard let path = positional.first else {

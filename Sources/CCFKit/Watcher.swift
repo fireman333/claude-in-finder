@@ -8,7 +8,11 @@ import CoreServices
 /// event we care about. A slow full reconcile still runs periodically in case
 /// an event is ever missed.
 public final class Watcher {
-    private let mirror: Mirror
+    /// Rebuilt for every pass rather than held: the settings it reads can change
+    /// while the agent runs, and a Mirror captures them at construction. Holding
+    /// one meant the agent kept syncing to the old layout and quietly undid every
+    /// change made through settings.
+    private let makeMirror: @Sendable () -> Mirror
     private let debounce: TimeInterval
     private let queue = DispatchQueue(label: "com.klaude.ccfinder.watch")
     private var pending: DispatchWorkItem?
@@ -16,9 +20,14 @@ public final class Watcher {
     private var timer: DispatchSourceTimer?
     private var watched: [String] = []
 
-    public init(mirror: Mirror, debounce: TimeInterval = 1.5) {
-        self.mirror = mirror
+    public init(mirror: @escaping @Sendable () -> Mirror, debounce: TimeInterval = 1.5) {
+        self.makeMirror = mirror
         self.debounce = debounce
+    }
+
+    /// For a one-off watch with fixed options, as the command line uses.
+    public convenience init(mirror: Mirror, debounce: TimeInterval = 1.5) {
+        self.init(mirror: { mirror }, debounce: debounce)
     }
 
     /// Starts watching and returns. FSEvents and the periodic timer both run on a
@@ -53,7 +62,7 @@ public final class Watcher {
     /// made inside Claude. The set of mirror folders grows as you work in new
     /// projects, so the stream is rebuilt whenever it changes.
     private func restartStream() {
-        let paths = mirror.watchPaths()
+        let paths = makeMirror().watchPaths()
         guard paths != watched else { return }
         watched = paths
 
@@ -102,7 +111,7 @@ public final class Watcher {
 
     private func sync(reason: String) {
         do {
-            let s = try mirror.reconcile()
+            let s = try makeMirror().reconcile()
             if s.created + s.renamed + s.updated + s.removed > 0 {
                 Log.line("[\(reason)] +\(s.created) ~\(s.updated) ↻\(s.renamed) -\(s.removed)")
             }

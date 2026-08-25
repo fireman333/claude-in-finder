@@ -13,6 +13,10 @@ trap 'rm -rf "$TMP"' EXIT
 export CCF_SESSIONS="$TMP/sessions/acct/org"
 export CCF_MIRROR="$TMP/central"
 export CCF_INDEX="$TMP/index.json"
+# isolate settings too, or the run picks up whatever the real install is set to
+export CCF_SUPPORT="$TMP/support"
+export CCF_TRASH="$TMP/trash"
+mkdir -p "$TMP/trash"
 mkdir -p "$CCF_SESSIONS"
 
 WORKDIR="$TMP/demo-project"

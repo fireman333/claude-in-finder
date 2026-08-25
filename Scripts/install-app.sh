@@ -63,7 +63,6 @@ for title, message in [
     ("Archive Claude Session", "archiveSession"),
     ("Delete Claude Session", "deleteSession"),
     ("Open Claude Archive Folder", "openArchiveFolder"),
-    ("Claude in Finder Settings\u2026", "openSettingsService"),
 ]:
     statuses[f"com.klaude.claude-in-finder - {title} - {message}"] = {
         "enabled_context_menu": True,

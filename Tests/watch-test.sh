@@ -10,6 +10,8 @@ TMP="$(mktemp -d)"
 export CCF_SESSIONS="$TMP/sessions/acct/org"
 export CCF_MIRROR="$TMP/central"
 export CCF_INDEX="$TMP/index.json"
+export CCF_TRASH="$TMP/trash"
+mkdir -p "$TMP/trash"
 export CCF_SUPPORT="$TMP/support"
 mkdir -p "$CCF_SESSIONS"
 
@@ -70,6 +72,36 @@ sys.exit(0 if json.load(open('$CCF_SESSIONS/local_bbbb.json')).get('isArchived')
   fi
 done
 echo "   the session was archived without a restart"
+mv "$WORKDIR/Claude Sessions/Archive/Retitled live.claudesession" "$WORKDIR/Claude Sessions/"
+until python3 -c "
+import json,sys
+sys.exit(0 if json.load(open('$CCF_SESSIONS/local_bbbb.json')).get('isArchived') is False else 1)" 2>/dev/null; do sleep 0.5; done
+
+echo "4. a settings change is honoured by the running watcher"
+#     the watcher used to capture its settings at startup, so it kept syncing to
+#     the old layout and undid the change a few seconds later
+"$CCFINDER" config layout central >/dev/null
+CENTRAL="$CCF_MIRROR/watched-project/Retitled live.claudesession"
+if wait_for "$CENTRAL" 10; then
+  echo "   moved to the central mirror"
+else
+  echo "FAIL: switching layout did not move the file"; cat "$TMP/watch.log"; exit 1
+fi
+
+echo "5. and it stays there — the watcher does not put it back"
+sleep 8
+[ -f "$CENTRAL" ] || { echo "FAIL: the watcher undid the settings change"; cat "$TMP/watch.log"; exit 1; }
+[ ! -f "$WORKDIR/Claude Sessions/Retitled live.claudesession" ] \
+  || { echo "FAIL: the file reappeared in the working folder"; exit 1; }
+
+echo "6. switching back moves it home again"
+"$CCFINDER" config layout workdir >/dev/null
+if wait_for "$WORKDIR/Claude Sessions/Retitled live.claudesession" 10; then
+  echo "   back in the working folder"
+else
+  echo "FAIL: switching back did not move the file"; exit 1
+fi
 
 echo
-echo "PASS — watcher reacts to creation, retitling and drag-to-archive"
+echo "PASS — watcher reacts to creation, retitling, drag-to-archive,"
+echo "       and to settings changed while it is running"

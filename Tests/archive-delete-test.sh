@@ -13,6 +13,8 @@ export CCF_SESSIONS="$TMP/sessions/acct/org"
 export CCF_MIRROR="$TMP/central"
 export CCF_INDEX="$TMP/index.json"
 export CCF_SUPPORT="$TMP/support"
+export CCF_TRASH="$TMP/trash"
+mkdir -p "$TMP/trash"
 mkdir -p "$CCF_SESSIONS"
 
 WORKDIR="$TMP/proj"; mkdir -p "$WORKDIR"
