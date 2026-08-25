@@ -57,7 +57,7 @@ public struct Session {
     let cliSessionID: String?    // the UUID accepted by claude://resume?session=
     let bridgeIDs: [String]
     let cwd: String
-    let title: String
+    public internal(set) var title: String
     let titleSource: String?     // "user" | "auto" | nil
     public internal(set) var isArchived: Bool
     let createdAt: Date?

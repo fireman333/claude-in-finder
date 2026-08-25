@@ -61,6 +61,24 @@ public enum SessionStore {
         return url
     }
 
+    /// Renames the session in Claude's own record.
+    ///
+    /// Marked as user-set, because that is what it is — otherwise Claude may
+    /// replace it again with a title generated from the conversation.
+    @discardableResult
+    public static func rename(desktopID: String, to title: String) throws -> URL {
+        guard let url = locate(desktopID: desktopID) else { throw StoreError.notFound(desktopID) }
+        guard let data = try? Data(contentsOf: url),
+              var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { throw StoreError.unreadable(desktopID) }
+
+        obj["title"] = title
+        obj["titleSource"] = "user"
+        let out = try JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])
+        try out.write(to: url, options: .atomic)
+        return url
+    }
+
     public static func delete(desktopID: String) throws {
         guard let url = locate(desktopID: desktopID) else { throw StoreError.notFound(desktopID) }
         let fm = FileManager.default

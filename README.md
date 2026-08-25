@@ -18,6 +18,7 @@ Sessions live next to the work they belong to:
 - **Space bar** → Quick Look shows the actual conversation.
 - **Rename a session in Claude** → the file renames itself, keeping its Finder tags.
 - **`+ New Session`** → starts a fresh session in that project, skipping the New screen.
+- **Rename a session file** → the session is renamed in Claude.
 - **Delete a session file** → the session is archived. Delete it again from
   `Archive/` → the session is deleted for real.
 - **Right-click a folder — or the empty space in a window** → *New Claude Session
@@ -112,6 +113,11 @@ Two guards keep that from going wrong:
   Something that merely went missing might have been dragged somewhere the tool
   does not look, so an unconfirmed disappearance is downgraded to archiving — a
   nuisance you undo by dragging it back, rather than something you cannot.
+
+The Settings window has a **Permissions** section showing whether folder access
+and the Finder menu are actually on, with buttons that jump straight to the right
+System Settings pane. Both lapse on every update, so it is worth a glance after
+installing.
 
 ## Access to protected folders
 

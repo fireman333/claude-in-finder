@@ -110,6 +110,23 @@ write_session "Renamed with no index"
 [ -f "$WORKDIR/Claude Sessions/Renamed with no index.claudesession" ] || fail "rename after index loss did not happen"
 [ ! -f "$BACK" ] || fail "orphan left behind: the old filename survived an index loss"
 
+echo "9b. renaming the file in Finder renames the session, and creates nothing new"
+write_session "Before rename"
+"$CCFINDER" sync >/dev/null
+FROM="$WORKDIR/Claude Sessions/Before rename.claudesession"
+[ -f "$FROM" ] || fail "setup: file missing"
+mv "$FROM" "$WORKDIR/Claude Sessions/After rename.claudesession"
+"$CCFINDER" sync >/dev/null
+[ -f "$WORKDIR/Claude Sessions/After rename.claudesession" ] || fail "the renamed file did not survive"
+[ ! -f "$FROM" ] || fail "the old name was recreated alongside it"
+python3 -c "
+import json,sys
+d=json.load(open('$CCF_SESSIONS/local_aaaa.json'))
+sys.exit(0 if d.get('title')=='After rename' and d.get('titleSource')=='user' else 1)" \
+  || fail "Claude's record was not renamed"
+COUNT=$(ls -1 "$WORKDIR/Claude Sessions"/*.claudesession | grep -vc "New Session")
+[ "$COUNT" = "1" ] || fail "expected one session file, found $COUNT"
+
 echo "10. every 'new session' entry point resolves to the working directory"
 write_session "Anchor"
 "$CCFINDER" sync >/dev/null

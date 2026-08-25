@@ -12,6 +12,8 @@ final class SettingsWindowController: NSWindowController {
     private var archiveCheck: NSButton!
     private var deletePopUp: NSPopUpButton!
     private var statusLabel: NSTextField!
+    private var accessLabel: NSTextField!
+    private var extensionLabel: NSTextField!
     private var busy: NSProgressIndicator!
 
     private var quitsOnClose = true
@@ -74,6 +76,27 @@ final class SettingsWindowController: NSWindowController {
         deleteHelp.lineBreakMode = .byWordWrapping
         deleteHelp.usesSingleLineMode = false
 
+        // The two things macOS can silently withhold, with a way to go fix them.
+        // Both lapse on every update, because an ad-hoc signed app is a different
+        // app to macOS each time it is rebuilt.
+        let permissionsTitle = label("Permissions", size: 13, weight: .medium)
+
+        accessLabel = label("Checking…", size: 11, weight: .regular, secondary: true)
+        let accessButton = NSButton(title: "Open Privacy Settings…",
+                                    target: self, action: #selector(openPrivacySettings))
+        accessButton.controlSize = .small
+        let accessRow = NSStackView(views: [accessLabel, NSView(), accessButton])
+        accessRow.orientation = .horizontal
+        accessRow.spacing = 8
+
+        extensionLabel = label("Checking…", size: 11, weight: .regular, secondary: true)
+        let extensionButton = NSButton(title: "Open Extension Settings…",
+                                       target: self, action: #selector(openExtensionSettings))
+        extensionButton.controlSize = .small
+        let extensionRow = NSStackView(views: [extensionLabel, NSView(), extensionButton])
+        extensionRow.orientation = .horizontal
+        extensionRow.spacing = 8
+
         statusLabel = label("", size: 11, weight: .regular, secondary: true)
 
         busy = NSProgressIndicator()
@@ -95,6 +118,7 @@ final class SettingsWindowController: NSWindowController {
             layoutTitle, layoutPopUp, layoutHelp,
             archiveCheck, archiveHelp,
             deleteTitle, deletePopUp, deleteHelp,
+            permissionsTitle, accessRow, extensionRow,
             statusLabel,
             buttons,
         ])
@@ -105,6 +129,8 @@ final class SettingsWindowController: NSWindowController {
         stack.setCustomSpacing(16, after: layoutHelp)
         stack.setCustomSpacing(16, after: archiveHelp)
         stack.setCustomSpacing(18, after: deleteHelp)
+        stack.setCustomSpacing(8, after: permissionsTitle)
+        stack.setCustomSpacing(18, after: extensionRow)
         stack.setCustomSpacing(14, after: statusLabel)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -120,7 +146,11 @@ final class SettingsWindowController: NSWindowController {
             layoutHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
             archiveHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
             deleteHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            accessRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            extensionRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
+
+        reloadPermissions()
 
         let config = Config.load()
         layoutPopUp.selectItem(at: config.layout == .workdir ? 0 : 1)
@@ -154,6 +184,60 @@ final class SettingsWindowController: NSWindowController {
         var config = Config.load()
         config.onFinderDelete = deletePopUp.indexOfSelectedItem == 0 ? .archive : .delete
         apply(config)
+    }
+
+    @objc private func openPrivacySettings() {
+        open("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+    }
+
+    @objc private func openExtensionSettings() {
+        open("x-apple.systempreferences:com.apple.ExtensionsPreferences")
+    }
+
+    private func open(_ string: String) {
+        guard let url = URL(string: string) else { return }
+        NSWorkspace.shared.open(url)
+        // Re-check shortly after: the user is most likely going straight there to
+        // change exactly this.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            self?.reloadPermissions()
+        }
+    }
+
+    /// Checked from this process, which shares its identity with the sync agent —
+    /// so what it can see here is what the agent can see.
+    private func reloadPermissions() {
+        DispatchQueue.global(qos: .utility).async {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let blocked = ["Desktop", "Documents", "Downloads"].filter { name in
+                let dir = home.appendingPathComponent(name)
+                guard FileManager.default.fileExists(atPath: dir.path) else { return false }
+                return (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) == nil
+            }
+            let extensionOn = Self.finderExtensionEnabled()
+
+            DispatchQueue.main.async {
+                self.accessLabel.stringValue = blocked.isEmpty
+                    ? "✓ Folder access granted"
+                    : "⚠ No access to \(blocked.joined(separator: ", "))"
+                self.extensionLabel.stringValue = extensionOn
+                    ? "✓ Finder menu enabled"
+                    : "⚠ Finder menu is switched off"
+            }
+        }
+    }
+
+    private static func finderExtensionEnabled() -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        task.arguments = ["-m", "-v", "-i", "com.klaude.claude-in-finder.findersync"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do { try task.run() } catch { return false }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return String(data: data, encoding: .utf8)?.hasPrefix("+") ?? false
     }
 
     @objc private func openMirror() {

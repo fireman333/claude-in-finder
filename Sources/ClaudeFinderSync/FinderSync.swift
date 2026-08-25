@@ -51,8 +51,6 @@ final class ClaudeFinderSync: FIFinderSync {
         let menu = NSMenu(title: "Claude in Finder")
         let controller = FIFinderSyncController.default()
 
-        Self.log("menu(for: \(menuKind.rawValue)) target=\(controller.targetedURL()?.path ?? "nil")")
-
         switch menuKind {
         case .contextualMenuForItems:
             let selected = controller.selectedItemURLs() ?? []

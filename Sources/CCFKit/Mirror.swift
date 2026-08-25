@@ -165,6 +165,23 @@ public struct Mirror {
                 }
             }
 
+            // Renamed in Finder? Then the file is the instruction, not the record.
+            // Only a rename in place counts: a move to another folder is either the
+            // Archive gesture or something to be undone, both handled elsewhere.
+            if let previous = index.entries[session.desktopID],
+               let current = scan.found[session.desktopID],
+               current.path != previous.path,
+               current.deletingLastPathComponent().path
+                   == URL(fileURLWithPath: previous.path).deletingLastPathComponent().path {
+                let renamed = current.deletingPathExtension().lastPathComponent
+                if !renamed.isEmpty, renamed != Self.sanitize(session.title) {
+                    try? SessionStore.rename(desktopID: session.desktopID, to: renamed)
+                    session.title = renamed
+                    index.entries[session.desktopID]?.path = current.path
+                    Log.line("renamed in Finder: \(previous.title) → \(renamed)")
+                }
+            }
+
             live.insert(session.desktopID)
 
             let root = self.root(for: session, fallbackNames: fallbackNames)
