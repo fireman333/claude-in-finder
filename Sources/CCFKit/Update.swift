@@ -6,7 +6,7 @@ import Foundation
 /// bundle, the DMG name and the update check can never disagree about what is
 /// installed, which is the one way an update reminder becomes a liar.
 public enum AppVersion {
-    public static let value = "0.10.0"
+    public static let value = "0.11.0"
 
     /// Override with CCF_VERSION so a test run can pretend to be any version.
     public static var current: String {
