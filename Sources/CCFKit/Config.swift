@@ -28,13 +28,18 @@ public struct Config: Codable, Equatable {
     /// stay reachable through "Open Archive Folder".
     public var showArchive: Bool = true
     public var onFinderDelete: DeleteAction = .archive
+    /// Whether each folder gets a "+ New Session" file. Deleting one in Finder
+    /// suppresses it for that folder alone; turning this back on restores them all.
+    public var newSessionFile: Bool = true
 
     public init(layout: Layout = .workdir,
                 showArchive: Bool = true,
-                onFinderDelete: DeleteAction = .archive) {
+                onFinderDelete: DeleteAction = .archive,
+                newSessionFile: Bool = true) {
         self.layout = layout
         self.showArchive = showArchive
         self.onFinderDelete = onFinderDelete
+        self.newSessionFile = newSessionFile
     }
 
     // Older config files predate onFinderDelete; default it rather than failing
@@ -44,6 +49,7 @@ public struct Config: Codable, Equatable {
         layout = try c.decodeIfPresent(Layout.self, forKey: .layout) ?? .workdir
         showArchive = try c.decodeIfPresent(Bool.self, forKey: .showArchive) ?? true
         onFinderDelete = try c.decodeIfPresent(DeleteAction.self, forKey: .onFinderDelete) ?? .archive
+        newSessionFile = try c.decodeIfPresent(Bool.self, forKey: .newSessionFile) ?? true
     }
 
     public static var url: URL { Paths.support.appendingPathComponent("config.json") }
@@ -73,6 +79,10 @@ public struct Config: Codable, Equatable {
         on-delete    \(onFinderDelete.rawValue)   \(onFinderDelete == .archive
                         ? "(deleting a session file in Finder archives the session)"
                         : "(deleting a session file in Finder deletes the session)")
+
+        new-file     \(newSessionFile ? "show" : "hide")   \(newSessionFile
+                        ? "(each folder gets a + New Session file)"
+                        : "(no + New Session files)")
 
         config file  \(Self.url.path)
         """

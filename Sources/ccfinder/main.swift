@@ -169,6 +169,7 @@ case "config":
           ccfinder config                        show current settings
           ccfinder config layout workdir|central where session files are kept
           ccfinder config archive show|hide      whether the Archive folder is visible
+          ccfinder config new-file show|hide      whether folders get a + New Session file
           ccfinder config on-delete archive|delete  what deleting a file means
                                                  (from Archive it always deletes)
 
@@ -184,6 +185,8 @@ case "config":
         config.layout = layout
     case ("archive", let value) where ["show", "hide", "on", "off"].contains(value):
         config.showArchive = (value == "show" || value == "on")
+    case ("new-file", let value) where ["show", "hide", "on", "off"].contains(value):
+        config.newSessionFile = (value == "show" || value == "on")
     case ("on-delete", let value):
         guard let action = Config.DeleteAction(rawValue: value) else {
             FileHandle.standardError.write(Data("on-delete must be archive or delete\n".utf8))

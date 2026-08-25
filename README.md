@@ -18,7 +18,10 @@ Sessions live next to the work they belong to:
 - **Space bar** → Quick Look shows the actual conversation.
 - **Rename a session in Claude** → the file renames itself, keeping its Finder tags.
 - **`+ New Session`** → starts a fresh session in that project, skipping the New screen.
-- **Rename a session file** → the session is renamed in Claude.
+- **Rename a session file** → the session is renamed in Claude. If Claude currently
+  has that conversation open it may write its own title back; the file keeps the
+  name you typed and the rename is re-applied until it takes.
+- **Delete the `+ New Session` file** → it stays deleted, in that folder only.
 - **Delete a session file** → the session is archived. Delete it again from
   `Archive/` → the session is deleted for real.
 - **Right-click a folder — or the empty space in a window** → *New Claude Session
@@ -76,6 +79,7 @@ Three ways in, whichever is nearest:
 | Where session files are kept | in each working folder · all together under `~/Claude Sessions` |
 | Show the Archive folder | visible · hidden (the files stay; open it from the right-click menu) |
 | Deleting a session file | archives the session · deletes it (from `Archive/` it always deletes) |
+| A `+ New Session` file in each folder | on · off (deleting one only affects its folder) |
 
 Or from the command line:
 

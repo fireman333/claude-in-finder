@@ -150,6 +150,40 @@ rm "$ARCHIVED"
 [ -f "$CCF_SUPPORT/deleted/local_33333333-3333-3333-3333-333333333333.json" ] || fail "no backup"
 [ ! -f "$ARCHIVED" ] || fail "the file came back"
 
+echo "13. a deleted + New Session file stays deleted, for that folder only"
+# earlier steps emptied the first project, and a folder with no sessions gets no
+# + New Session file either
+cat > "$CCF_SESSIONS/local_66666666-6666-6666-6666-666666666666.json" <<JSON
+{"sessionId":"local_66666666-6666-6666-6666-666666666666",
+ "cliSessionId":"66666666-6666-6666-6666-666666666666","cwd":"$WORKDIR",
+ "title":"Still here","titleSource":"user","isArchived":false,
+ "createdAt":1780000000000,"lastActivityAt":1780000006000}
+JSON
+OTHER_W="$TMP/second-proj"; mkdir -p "$OTHER_W"
+cat > "$CCF_SESSIONS/local_55555555-5555-5555-5555-555555555555.json" <<JSON
+{"sessionId":"local_55555555-5555-5555-5555-555555555555",
+ "cliSessionId":"55555555-5555-5555-5555-555555555555","cwd":"$OTHER_W",
+ "title":"Neighbour","titleSource":"user","isArchived":false,
+ "createdAt":1780000000000,"lastActivityAt":1780000005000}
+JSON
+"$CCFINDER" sync >/dev/null
+NEW1="$WORKDIR/Claude Sessions/+ New Session.claudesession"
+NEW2="$OTHER_W/Claude Sessions/+ New Session.claudesession"
+[ -f "$NEW1" ] && [ -f "$NEW2" ] || fail "setup: + New Session files missing"
+rm "$NEW1"
+"$CCFINDER" sync >/dev/null
+[ ! -f "$NEW1" ] || fail "the deleted + New Session file came back"
+[ -f "$NEW2" ] || fail "deleting one folder's file removed another folder's too"
+"$CCFINDER" sync >/dev/null
+[ ! -f "$NEW1" ] || fail "it came back on a later pass"
+
+echo "14. turning the setting off removes them, and back on restores them all"
+"$CCFINDER" config new-file hide >/dev/null
+[ ! -f "$NEW2" ] || fail "hiding did not remove the + New Session files"
+"$CCFINDER" config new-file show >/dev/null
+[ -f "$NEW1" ] || fail "turning it back on did not restore the suppressed folder"
+[ -f "$NEW2" ] || fail "turning it back on did not restore the other folder"
+
 echo
 echo "PASS — settings take effect immediately, hiding keeps the files,"
 echo "       and deleting in Finder does what the setting says"

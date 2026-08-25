@@ -11,6 +11,7 @@ final class SettingsWindowController: NSWindowController {
     private var layoutPopUp: NSPopUpButton!
     private var archiveCheck: NSButton!
     private var deletePopUp: NSPopUpButton!
+    private var newFileCheck: NSButton!
     private var statusLabel: NSTextField!
     private var accessLabel: NSTextField!
     private var extensionLabel: NSTextField!
@@ -76,6 +77,15 @@ final class SettingsWindowController: NSWindowController {
         deleteHelp.lineBreakMode = .byWordWrapping
         deleteHelp.usesSingleLineMode = false
 
+        newFileCheck = NSButton(checkboxWithTitle: "Put a \"+ New Session\" file in each folder",
+                                target: self, action: #selector(newFileChanged))
+        let newFileHelp = label(
+            "Delete one in Finder and it stays gone for that folder. Turning this "
+                + "back on brings them all back.",
+            size: 11, weight: .regular, secondary: true)
+        newFileHelp.lineBreakMode = .byWordWrapping
+        newFileHelp.usesSingleLineMode = false
+
         // The two things macOS can silently withhold, with a way to go fix them.
         // Both lapse on every update, because an ad-hoc signed app is a different
         // app to macOS each time it is rebuilt.
@@ -118,6 +128,7 @@ final class SettingsWindowController: NSWindowController {
             layoutTitle, layoutPopUp, layoutHelp,
             archiveCheck, archiveHelp,
             deleteTitle, deletePopUp, deleteHelp,
+            newFileCheck, newFileHelp,
             permissionsTitle, accessRow, extensionRow,
             statusLabel,
             buttons,
@@ -128,7 +139,8 @@ final class SettingsWindowController: NSWindowController {
         stack.setCustomSpacing(16, after: title)
         stack.setCustomSpacing(16, after: layoutHelp)
         stack.setCustomSpacing(16, after: archiveHelp)
-        stack.setCustomSpacing(18, after: deleteHelp)
+        stack.setCustomSpacing(16, after: deleteHelp)
+        stack.setCustomSpacing(18, after: newFileHelp)
         stack.setCustomSpacing(8, after: permissionsTitle)
         stack.setCustomSpacing(18, after: extensionRow)
         stack.setCustomSpacing(14, after: statusLabel)
@@ -146,6 +158,7 @@ final class SettingsWindowController: NSWindowController {
             layoutHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
             archiveHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
             deleteHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            newFileHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
             accessRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             extensionRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
@@ -156,6 +169,7 @@ final class SettingsWindowController: NSWindowController {
         layoutPopUp.selectItem(at: config.layout == .workdir ? 0 : 1)
         archiveCheck.state = config.showArchive ? .on : .off
         deletePopUp.selectItem(at: config.onFinderDelete == .archive ? 0 : 1)
+        newFileCheck.state = config.newSessionFile ? .on : .off
     }
 
     private func label(_ text: String, size: CGFloat,
@@ -183,6 +197,12 @@ final class SettingsWindowController: NSWindowController {
     @objc private func deleteActionChanged() {
         var config = Config.load()
         config.onFinderDelete = deletePopUp.indexOfSelectedItem == 0 ? .archive : .delete
+        apply(config)
+    }
+
+    @objc private func newFileChanged() {
+        var config = Config.load()
+        config.newSessionFile = newFileCheck.state == .on
         apply(config)
     }
 
@@ -269,6 +289,7 @@ final class SettingsWindowController: NSWindowController {
         layoutPopUp.isEnabled = !on
         archiveCheck.isEnabled = !on
         deletePopUp.isEnabled = !on
+        newFileCheck.isEnabled = !on
         on ? busy.startAnimation(nil) : busy.stopAnimation(nil)
     }
 

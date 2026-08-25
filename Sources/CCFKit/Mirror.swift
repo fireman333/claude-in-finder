@@ -22,11 +22,23 @@ public struct Mirror {
         var path: String      // absolute since v2; relative to the mirror root in v1
         var title: String
         var hash: String
+        /// A rename made in Finder that Claude has not accepted yet.
+        var pendingTitle: String?
+        var pendingAttempts: Int?
     }
 
     struct Index: Codable {
         var version: Int = 2
         var entries: [String: Entry] = [:]   // keyed by desktop session id
+        /// Folders where the user deleted the "+ New Session" file. Putting it
+        /// back there would be arguing with them.
+        var noNewSessionFile: [String] = []
+        /// Folders we have written it to, so a later absence is a deletion rather
+        /// than a folder we simply have not reached yet.
+        var newSessionFolders: [String] = []
+        /// What the setting was on the previous pass, so switching it back on can
+        /// be told apart from steady state and undo the per-folder suppressions.
+        var newSessionFileEnabled: Bool?
     }
 
     /// Leave archived sessions out of the mirror entirely (command line only).
@@ -41,6 +53,8 @@ public struct Mirror {
     public var showArchive: Bool = true
     /// What a session file disappearing from Finder should mean.
     public var onFinderDelete: Config.DeleteAction = .archive
+    /// Whether folders get a "+ New Session" file at all.
+    public var showNewSessionFile: Bool = true
 
     let fm = FileManager.default
     /// A whole-file lock held for the duration of a reconcile.
@@ -73,7 +87,8 @@ public struct Mirror {
     public init(skipArchived: Bool, prune: Bool, verbose: Bool,
                 central: Bool = false, gitExclude: Bool = true,
                 showArchive: Bool = true,
-                onFinderDelete: Config.DeleteAction = .archive) {
+                onFinderDelete: Config.DeleteAction = .archive,
+                showNewSessionFile: Bool = true) {
         self.skipArchived = skipArchived
         self.prune = prune
         self.verbose = verbose
@@ -81,6 +96,7 @@ public struct Mirror {
         self.gitExclude = gitExclude
         self.showArchive = showArchive
         self.onFinderDelete = onFinderDelete
+        self.showNewSessionFile = showNewSessionFile
     }
 
     /// Builds a mirror from the saved settings, with optional per-run overrides.
@@ -97,7 +113,8 @@ public struct Mirror {
             central: forceCentral || config.layout == .central,
             gitExclude: gitExclude,
             showArchive: config.showArchive,
-            onFinderDelete: config.onFinderDelete
+            onFinderDelete: config.onFinderDelete,
+            showNewSessionFile: config.newSessionFile
         )
     }
 
@@ -178,7 +195,31 @@ public struct Mirror {
                     try? SessionStore.rename(desktopID: session.desktopID, to: renamed)
                     session.title = renamed
                     index.entries[session.desktopID]?.path = current.path
+                    index.entries[session.desktopID]?.pendingTitle = renamed
+                    index.entries[session.desktopID]?.pendingAttempts = 0
                     Log.line("renamed in Finder: \(previous.title) → \(renamed)")
+                }
+            }
+
+            // Claude keeps the session it currently has open in memory and writes
+            // its own title back over ours. Rather than let the file flap between
+            // the two names, keep the name the user typed and keep re-applying it;
+            // it takes hold as soon as Claude lets go of the session.
+            if let pending = index.entries[session.desktopID]?.pendingTitle {
+                if session.title == pending {
+                    index.entries[session.desktopID]?.pendingTitle = nil
+                    index.entries[session.desktopID]?.pendingAttempts = nil
+                } else {
+                    let attempts = (index.entries[session.desktopID]?.pendingAttempts ?? 0) + 1
+                    if attempts > 60 {
+                        index.entries[session.desktopID]?.pendingTitle = nil
+                        index.entries[session.desktopID]?.pendingAttempts = nil
+                        Log.line("giving up on renaming to \(pending); Claude keeps rewriting it")
+                    } else {
+                        index.entries[session.desktopID]?.pendingAttempts = attempts
+                        try? SessionStore.rename(desktopID: session.desktopID, to: pending)
+                        session.title = pending
+                    }
                 }
             }
 
@@ -245,9 +286,43 @@ public struct Mirror {
             }
         }
 
-        try writeFolderExtras(roots: roots, sessions: sessions, fallbackNames: fallbackNames)
+        // A "+ New Session" file the user threw away is not put back. A folder we
+        // have never written to is not the same thing as one they emptied, hence
+        // the record of where it has been placed.
+        var suppressed = Set(index.noNewSessionFile)
+        var placed = Set(index.newSessionFolders)
+
+        // Switching the setting back on is a request for all of them, including in
+        // folders where one was deleted individually.
+        if showNewSessionFile, index.newSessionFileEnabled == false {
+            suppressed.removeAll()
+            placed.removeAll()   // nothing to compare against; this pass re-places
+        }
+        index.newSessionFileEnabled = showNewSessionFile
+
+        if showNewSessionFile {
+            for dir in roots where scan.listed.contains(dir.path) && placed.contains(dir.path) {
+                let opener = dir.appendingPathComponent("+ New Session.claudesession")
+                if !fm.fileExists(atPath: opener.path), !suppressed.contains(dir.path) {
+                    suppressed.insert(dir.path)
+                    Log.line("leaving \(dir.lastPathComponent) without a + New Session file, as deleted")
+                }
+            }
+        } else {
+            for dir in roots {
+                let opener = dir.appendingPathComponent("+ New Session.claudesession")
+                try? fm.removeItem(at: opener)
+            }
+        }
+        index.noNewSessionFile = suppressed.sorted()
+        var placed2 = placed
+
+        try writeFolderExtras(roots: roots, sessions: sessions, fallbackNames: fallbackNames,
+                              suppressedNewSession: showNewSessionFile ? suppressed : Set(roots.map(\.path)),
+                              placedNewSession: &placed2)
         sweepEmptyArchives(roots: roots)
         applyArchiveVisibility(roots: roots)
+        index.newSessionFolders = placed2.sorted()
         try saveIndex(index)
         return stats
     }
@@ -313,16 +388,22 @@ public struct Mirror {
     /// git repositories, by adding an entry to .git/info/exclude — which is local
     /// to the clone and never committed.
     private func writeFolderExtras(roots: Set<URL>, sessions: [Session],
-                                   fallbackNames: [String: String]) throws {
-        var cwdByRoot: [URL: String] = [:]
+                                   fallbackNames: [String: String],
+                                   suppressedNewSession: Set<String>,
+                                   placedNewSession: inout Set<String>) throws {
+        // Keyed by path, not by URL: URL(fileURLWithPath:) stats the filesystem to
+        // decide whether it is a directory, so the same folder is a different URL
+        // before and after it is created — equal paths, unequal values, and a
+        // lookup that silently misses.
+        var cwdByRoot: [String: String] = [:]
         for s in sessions where !s.cwd.isEmpty {
-            cwdByRoot[mainRoot(cwd: s.cwd, fallbackNames: fallbackNames)] = s.cwd
+            cwdByRoot[mainRoot(cwd: s.cwd, fallbackNames: fallbackNames).path] = s.cwd
         }
 
         for dir in Set(roots.map { $0.lastPathComponent == Self.archiveFolderName
                                    ? $0.deletingLastPathComponent() : $0 }) {
             guard fm.fileExists(atPath: dir.path) else { continue }
-            guard let cwd = cwdByRoot[dir], !cwd.isEmpty else { continue }
+            guard let cwd = cwdByRoot[dir.path], !cwd.isEmpty else { continue }
 
             let marker = dir.appendingPathComponent(".ccf-project")
             if TimeLimited.text(at: marker) != cwd {
@@ -330,10 +411,12 @@ public struct Mirror {
             }
 
             let opener = dir.appendingPathComponent("+ New Session.claudesession")
+            if suppressedNewSession.contains(dir.path) { continue }
             let html = Self.newSessionHTML(cwd: cwd)
             if TimeLimited.text(at: opener) != html {
                 try? write(html, to: opener)
             }
+            placedNewSession.insert(dir.path)
 
             if gitExclude, dir.deletingLastPathComponent().path == cwd {
                 addGitExclude(repo: URL(fileURLWithPath: cwd))
