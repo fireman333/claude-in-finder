@@ -49,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func application(_ application: NSApplication, open urls: [URL]) {
         claim()
+        if let request = urls.compactMap(Self.controlRequest).first {
+            act(verb: request.verb, files: request.files)
+            return
+        }
         Task {
             for url in urls {
                 if let link = SessionFile.deepLink(for: url) {
@@ -137,19 +141,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        act(verb: verb, files: files, error: error)
+    }
+
+    /// The Finder extension cannot put a confirmation sheet on screen, so it hands
+    /// destructive actions back here through the ccfinder:// scheme.
+    func act(verb: String, files: [URL], quitWhenDone: Bool = true) {
+        act(verb: verb, files: files, error: nil, quitWhenDone: quitWhenDone)
+    }
+
+    private func act(verb: String, files: [URL],
+                     error: AutoreleasingUnsafeMutablePointer<NSString>?,
+                     quitWhenDone: Bool = true) {
+        func fail(_ message: String) {
+            error?.pointee = message as NSString
+            if quitWhenDone { NSApp.terminate(nil) }
+        }
 
         let targets: [(url: URL, id: String)] = files.compactMap { url in
             guard let id = SessionFile.meta(in: url)["claude-desktop-id"], !id.isEmpty else { return nil }
             return (url, id)
         }
         guard !targets.isEmpty else {
-            error.pointee = "That is not a session file — \"+ New Session\" cannot be archived or deleted." as NSString
-            NSApp.terminate(nil)
+            fail("That is not a session file — \"+ New Session\" cannot be archived or deleted.")
             return
         }
 
         guard confirm(verb: verb, targets: targets) else {
-            NSApp.terminate(nil)
+            if quitWhenDone { NSApp.terminate(nil) }
             return
         }
 
@@ -173,9 +192,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         AppLog.write("\(verb) \(targets.count) session(s), \(failures.count) failed")
         if !failures.isEmpty {
-            error.pointee = failures.joined(separator: "\n") as NSString
+            error?.pointee = failures.joined(separator: "\n") as NSString
         }
-        NSApp.terminate(nil)
+        if quitWhenDone { NSApp.terminate(nil) }
+    }
+
+    /// Parses ccfinder://archive?path=…&path=… into a verb and its files.
+    static func controlRequest(from url: URL) -> (verb: String, files: [URL])? {
+        guard url.scheme == "ccfinder",
+              let host = url.host, ["archive", "delete"].contains(host),
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+        else { return nil }
+        let files = items.filter { $0.name == "path" }
+            .compactMap(\.value)
+            .map { URL(fileURLWithPath: $0) }
+        return files.isEmpty ? nil : (host, files)
     }
 
     private func confirm(verb: String, targets: [(url: URL, id: String)]) -> Bool {
@@ -336,8 +367,13 @@ final class AgentDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    /// A session file double-clicked while the agent is running is delivered here.
+    /// Session files double-clicked, and ccfinder:// requests from the Finder
+    /// extension, both arrive here while the agent is running.
     func application(_ application: NSApplication, open urls: [URL]) {
+        if let request = urls.compactMap(AppDelegate.controlRequest).first {
+            services.act(verb: request.verb, files: request.files, quitWhenDone: false)
+            return
+        }
         Task {
             for url in urls where SessionFile.deepLink(for: url) != nil {
                 if let link = SessionFile.deepLink(for: url) {

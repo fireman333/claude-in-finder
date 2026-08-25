@@ -20,9 +20,11 @@ Sessions live next to the work they belong to:
 - **`+ New Session`** → starts a fresh session in that project, skipping the New screen.
 - **Delete a session file** → the session is archived. Delete it again from
   `Archive/` → the session is deleted for real.
-- **Right-click any folder** → Services → *New Claude Session Here*, *Open Claude
-  Archive Folder*, *Claude in Finder Settings…*.
-- **Right-click a session** → Services → *Archive* or *Delete*.
+- **Right-click a folder — or the empty space in a window** → *New Claude Session
+  Here*, *Open Claude Archive Folder*.
+- **Right-click a session** → *Archive Claude Session*, *Delete Claude Session*.
+
+Those live in the contextual menu itself, not in the Services submenu.
 - **Drag a session into `Archive/`** → it is archived in Claude too. Drag it back
   out to unarchive.
 
@@ -196,6 +198,13 @@ holding its title, working directory, archive flag and `cliSessionId`. Watching
 that one directory with FSEvents covers creation, retitling and archiving —
 there is no need to parse the much larger `~/.claude/projects/**/*.jsonl`
 transcripts except to render the preview.
+
+**The menu is a Finder Sync extension.** Services can only ever appear inside the
+Services submenu, and never at all when you right-click empty space. A Finder Sync
+extension does both. It has one non-obvious requirement: it must carry the
+`app-sandbox` entitlement or `pluginkit` ignores the bundle outright, with nothing
+logged anywhere to say why. Installing therefore must not re-sign the app with
+`--deep`, which would strip that entitlement back off.
 
 **Quick Look comes free.** The `.claudesession` file *is* an HTML document, and
 its UTI (`com.klaude.claude-session`) declares conformance to `public.html`.

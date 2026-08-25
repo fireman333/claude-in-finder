@@ -6,6 +6,7 @@ set -euo pipefail
 LABEL="com.klaude.ccfinder"
 APP="$HOME/Applications/Claude in Finder.app"
 
+pluginkit -e ignore -i "com.klaude.claude-in-finder.findersync" 2>/dev/null || true
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 rm -f "$HOME/.local/bin/ccfinder"

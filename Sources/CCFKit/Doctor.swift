@@ -73,11 +73,9 @@ public enum Doctor {
             print("      Privacy & Security → Full Disk Access, then: launchctl kickstart -k gui/$(id -u)/com.klaude.ccfinder")
         }
 
-        let services = serviceStatus()
-        check("Finder services enabled", services.allEnabled,
-              services.allEnabled
-                  ? "\(services.total) services"
-                  : "\(services.disabled.joined(separator: ", ")) hidden — re-run Scripts/install-app.sh")
+        let ext = finderExtensionEnabled()
+        check("Finder menu extension", ext.enabled,
+              ext.detail.isEmpty ? "registered and in use" : ext.detail)
 
         let status = launchdStatus(label: "com.klaude.ccfinder")
         check("Sync agent running", status.running,
@@ -86,29 +84,27 @@ public enum Doctor {
                   : status.detail)
     }
 
-    /// macOS keeps a per-service on/off switch in pbs.plist. A service missing from
-    /// that dictionary has never been enabled, and Finder will not draw it.
-    private static func serviceStatus() -> (total: Int, allEnabled: Bool, disabled: [String]) {
-        let items = [
-            ("New Claude Session Here", "newSessionHere"),
-            ("Archive Claude Session", "archiveSession"),
-            ("Delete Claude Session", "deleteSession"),
-            ("Open Claude Archive Folder", "openArchiveFolder"),
-        ]
-        let prefs = Paths.home.appendingPathComponent("Library/Preferences/pbs.plist")
-        guard let data = try? Data(contentsOf: prefs),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let statuses = plist["NSServicesStatus"] as? [String: Any]
-        else { return (items.count, false, items.map(\.0)) }
+    /// The contextual-menu items come from a Finder Sync extension. pluginkit
+    /// marks an enabled one with a leading "+".
+    private static func finderExtensionEnabled() -> (enabled: Bool, detail: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+        task.arguments = ["-m", "-v", "-i", "com.klaude.claude-in-finder.findersync"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
 
-        var disabled: [String] = []
-        for (title, message) in items {
-            let key = "com.klaude.claude-in-finder - \(title) - \(message)"
-            let entry = statuses[key] as? [String: Any]
-            let on = (entry?["enabled_context_menu"] as? NSNumber)?.boolValue ?? false
-            if !on { disabled.append(title) }
-        }
-        return (items.count, disabled.isEmpty, disabled)
+        do { try task.run() } catch { return (false, "could not run pluginkit") }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+
+        guard let text = String(data: data, encoding: .utf8),
+              text.contains("com.klaude.claude-in-finder.findersync")
+        else { return (false, "not registered — re-run Scripts/install.sh") }
+
+        if text.hasPrefix("+") { return (true, "") }
+        return (false, "registered but switched off — enable Claude in Finder in "
+                     + "System Settings → General → Login Items & Extensions → Finder Extensions")
     }
 
     /// Shells out to launchctl: there is no public API for querying another job.

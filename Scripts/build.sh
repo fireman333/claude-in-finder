@@ -69,6 +69,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     </dict>
   </array>
 
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>$BUNDLE_ID</string>
+      <key>CFBundleURLSchemes</key><array><string>ccfinder</string></array>
+    </dict>
+  </array>
+
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -80,50 +88,64 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     </dict>
   </array>
 
-  <!-- Right-click a folder in Finder → Services → New Claude Session Here -->
-  <key>NSServices</key>
-  <array>
-    <dict>
-      <key>NSMenuItem</key>
-      <dict><key>default</key><string>New Claude Session Here</string></dict>
-      <key>NSMessage</key><string>newSessionHere</string>
-      <key>NSPortName</key><string>$APP_NAME</string>
-      <key>NSSendFileTypes</key><array><string>public.folder</string></array>
-      <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string></array>
-    </dict>
-    <dict>
-      <key>NSMenuItem</key>
-      <dict><key>default</key><string>Open Claude Archive Folder</string></dict>
-      <key>NSMessage</key><string>openArchiveFolder</string>
-      <key>NSPortName</key><string>$APP_NAME</string>
-      <key>NSSendFileTypes</key><array><string>public.folder</string></array>
-      <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string></array>
-    </dict>
-    <dict>
-      <key>NSMenuItem</key>
-      <dict><key>default</key><string>Archive Claude Session</string></dict>
-      <key>NSMessage</key><string>archiveSession</string>
-      <key>NSPortName</key><string>$APP_NAME</string>
-      <key>NSSendFileTypes</key><array><string>$UTI</string></array>
-      <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string></array>
-    </dict>
-    <dict>
-      <key>NSMenuItem</key>
-      <dict><key>default</key><string>Delete Claude Session</string></dict>
-      <key>NSMessage</key><string>deleteSession</string>
-      <key>NSPortName</key><string>$APP_NAME</string>
-      <key>NSSendFileTypes</key><array><string>$UTI</string></array>
-      <key>NSSendTypes</key><array><string>NSFilenamesPboardType</string></array>
-    </dict>
-  </array>
 </dict>
 </plist>
 PLIST
 
+echo "==> assembling Finder Sync extension"
+EXT="$APP/Contents/PlugIns/ClaudeFinderSync.appex"
+mkdir -p "$EXT/Contents/MacOS"
+cp "$BIN/ClaudeFinderSync" "$EXT/Contents/MacOS/ClaudeFinderSync"
+
+cat > "$EXT/Contents/Info.plist" <<EXTPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Claude in Finder</string>
+  <key>CFBundleDisplayName</key><string>Claude in Finder</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID.findersync</string>
+  <key>CFBundleExecutable</key><string>ClaudeFinderSync</string>
+  <key>CFBundlePackageType</key><string>XPC!</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleSignature</key><string>????</string>
+  <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSExtension</key>
+  <dict>
+    <key>NSExtensionAttributes</key><dict/>
+    <key>NSExtensionPointIdentifier</key><string>com.apple.FinderSync</string>
+    <key>NSExtensionPrincipalClass</key><string>ClaudeFinderSync</string>
+  </dict>
+</dict>
+</plist>
+EXTPLIST
+
+# A Finder Sync extension is only registered by pluginkit if it is sandboxed —
+# without the entitlement the bundle is simply ignored, with nothing logged
+# anywhere to say why. The home-relative exception is what lets it read the
+# .ccf-project markers and see whether an Archive folder exists.
+cat > "$OUT/findersync.entitlements" <<ENTITLEMENTS
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.app-sandbox</key><true/>
+  <key>com.apple.security.files.user-selected.read-write</key><true/>
+  <key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+  <array><string>/</string></array>
+</dict>
+</plist>
+ENTITLEMENTS
+
 # Ad-hoc signature. Enough for a locally built, non-quarantined app; there is no
 # app extension here, which is precisely why no developer certificate is needed.
 echo "==> codesign (ad-hoc)"
-/usr/bin/codesign --force --deep --sign - "$APP"
+/usr/bin/codesign --force --sign - --entitlements "$OUT/findersync.entitlements" "$EXT"
+/usr/bin/codesign --force --sign - "$APP"
 
 echo
 echo "built: $APP"
