@@ -32,6 +32,23 @@ final class StatusItemController: NSObject {
         }
 
         item.menu = buildMenu()
+        refreshUpdateBadge()
+    }
+
+    /// A dot beside the icon is the whole of the reminder: enough to notice on
+    /// the next glance at the menu bar, and nothing that interrupts.
+    func refreshUpdateBadge() {
+        guard let button = item.button, button.image != nil else { return }
+        if let release = Update.pending {
+            // Drawn small on purpose: at the menu bar's own text size the dot is
+            // a blob next to the icon rather than a badge on it.
+            button.attributedTitle = NSAttributedString(
+                string: " ●", attributes: [.font: NSFont.systemFont(ofSize: 7)])
+            button.toolTip = "Claude in Finder — \(release.version) is available"
+        } else {
+            button.title = ""
+            button.toolTip = "Claude in Finder"
+        }
     }
 
     private func buildMenu() -> NSMenu {
@@ -42,6 +59,15 @@ final class StatusItemController: NSObject {
         status.isEnabled = false
         status.tag = Tag.status
         menu.addItem(status)
+
+        // Carried hidden rather than inserted and removed, so its position in the
+        // menu never moves under the pointer.
+        let update = NSMenuItem(title: "", action: #selector(openRelease), keyEquivalent: "")
+        update.target = self
+        update.tag = Tag.update
+        update.isHidden = true
+        menu.addItem(update)
+
         menu.addItem(.separator())
 
         menu.addItem(withTitle: "Open Claude Sessions",
@@ -56,7 +82,7 @@ final class StatusItemController: NSObject {
         return menu
     }
 
-    private enum Tag { static let status = 1 }
+    private enum Tag { static let status = 1; static let update = 2 }
 
     /// A speech bubble drawn by hand, in case the SF Symbol is unavailable.
     private static func fallbackIcon() -> NSImage {
@@ -98,6 +124,11 @@ final class StatusItemController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    @objc private func openRelease() {
+        let url = Update.pending.flatMap { URL(string: $0.url) } ?? Update.releasesPage
+        NSWorkspace.shared.open(url)
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -108,6 +139,13 @@ extension StatusItemController: NSMenuDelegate {
     /// would mean waking up to recount on every change for something nobody is
     /// looking at.
     func menuWillOpen(_ menu: NSMenu) {
+        if let update = menu.item(withTag: Tag.update) {
+            let release = Update.pending
+            update.title = release.map { "Update to \($0.version)…" } ?? ""
+            update.isHidden = release == nil
+        }
+        refreshUpdateBadge()
+
         guard let status = menu.item(withTag: Tag.status) else { return }
         status.title = "Counting…"
         DispatchQueue.global(qos: .userInitiated).async {

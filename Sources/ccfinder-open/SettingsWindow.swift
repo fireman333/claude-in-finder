@@ -12,6 +12,9 @@ final class SettingsWindowController: NSWindowController {
     private var archiveCheck: NSButton!
     private var deletePopUp: NSPopUpButton!
     private var newFileCheck: NSButton!
+    private var updateCheckBox: NSButton!
+    private var updateLabel: NSTextField!
+    private var checkNowButton: NSButton!
     private var statusLabel: NSTextField!
     private var accessLabel: NSTextField!
     private var extensionLabel: NSTextField!
@@ -86,6 +89,29 @@ final class SettingsWindowController: NSWindowController {
         newFileHelp.lineBreakMode = .byWordWrapping
         newFileHelp.usesSingleLineMode = false
 
+        // Updates are reported, never installed: the app is ad-hoc signed and an
+        // install re-grants two permissions by hand, so it is not something to do
+        // behind the user's back.
+        let updatesTitle = label("Updates", size: 13, weight: .medium)
+        updateCheckBox = NSButton(checkboxWithTitle: "Tell me when a new release is out",
+                                  target: self, action: #selector(updateCheckChanged))
+        let updatesHelp = label(
+            "Looks at this project's GitHub releases once a day. A new version is "
+                + "shown here and in the menu bar; nothing is downloaded or installed for you.",
+            size: 11, weight: .regular, secondary: true)
+        updatesHelp.lineBreakMode = .byWordWrapping
+        updatesHelp.usesSingleLineMode = false
+
+        updateLabel = label("", size: 11, weight: .regular, secondary: true)
+        checkNowButton = NSButton(title: "Check Now", target: self, action: #selector(checkNowClicked))
+        checkNowButton.controlSize = .small
+        let releaseButton = NSButton(title: "Release Notes…",
+                                     target: self, action: #selector(openReleasePage))
+        releaseButton.controlSize = .small
+        let updateRow = NSStackView(views: [updateLabel, NSView(), checkNowButton, releaseButton])
+        updateRow.orientation = .horizontal
+        updateRow.spacing = 8
+
         // The two things macOS can silently withhold, with a way to go fix them.
         // Both lapse on every update, because an ad-hoc signed app is a different
         // app to macOS each time it is rebuilt.
@@ -129,6 +155,7 @@ final class SettingsWindowController: NSWindowController {
             archiveCheck, archiveHelp,
             deleteTitle, deletePopUp, deleteHelp,
             newFileCheck, newFileHelp,
+            updatesTitle, updateCheckBox, updatesHelp, updateRow,
             permissionsTitle, accessRow, extensionRow,
             statusLabel,
             buttons,
@@ -141,6 +168,8 @@ final class SettingsWindowController: NSWindowController {
         stack.setCustomSpacing(16, after: archiveHelp)
         stack.setCustomSpacing(16, after: deleteHelp)
         stack.setCustomSpacing(18, after: newFileHelp)
+        stack.setCustomSpacing(8, after: updatesTitle)
+        stack.setCustomSpacing(18, after: updateRow)
         stack.setCustomSpacing(8, after: permissionsTitle)
         stack.setCustomSpacing(18, after: extensionRow)
         stack.setCustomSpacing(14, after: statusLabel)
@@ -159,6 +188,8 @@ final class SettingsWindowController: NSWindowController {
             archiveHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
             deleteHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
             newFileHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            updatesHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            updateRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             accessRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             extensionRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
@@ -170,6 +201,11 @@ final class SettingsWindowController: NSWindowController {
         archiveCheck.state = config.showArchive ? .on : .off
         deletePopUp.selectItem(at: config.onFinderDelete == .archive ? 0 : 1)
         newFileCheck.state = config.newSessionFile ? .on : .off
+        updateCheckBox.state = config.updateCheck ? .on : .off
+        showUpdateState()
+        // Catch up on a check that came due while the app was not running, rather
+        // than showing a stale answer to someone who has just opened Settings.
+        if config.updateCheck, Update.isDue { runUpdateCheck(inBackground: true) }
     }
 
     private func label(_ text: String, size: CGFloat,
@@ -204,6 +240,61 @@ final class SettingsWindowController: NSWindowController {
         var config = Config.load()
         config.newSessionFile = newFileCheck.state == .on
         apply(config)
+    }
+
+    @objc private func updateCheckChanged() {
+        var config = Config.load()
+        config.updateCheck = updateCheckBox.state == .on
+        // Saved on its own: unlike the others this changes nothing about where
+        // files live, so putting the mirror through a reconcile would be theatre.
+        try? config.save()
+        if config.updateCheck, Update.isDue {
+            runUpdateCheck(inBackground: true)
+        } else {
+            showUpdateState()
+        }
+    }
+
+    @objc private func checkNowClicked() {
+        runUpdateCheck(inBackground: false)
+    }
+
+    /// A background check is the one nobody asked for, so it fails silently and
+    /// leaves the last known answer on screen.
+    private func runUpdateCheck(inBackground: Bool) {
+        checkNowButton.isEnabled = false
+        if !inBackground { updateLabel.stringValue = "Checking…" }
+        DispatchQueue.global(qos: .utility).async {
+            let result = Result { try Update.check() }
+            DispatchQueue.main.async {
+                self.checkNowButton.isEnabled = true
+                switch result {
+                case .success:
+                    self.showUpdateState()
+                case .failure(let error):
+                    if inBackground {
+                        self.showUpdateState()
+                    } else {
+                        self.updateLabel.stringValue = "⚠ Could not check — \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
+    }
+
+    private func showUpdateState() {
+        if let release = Update.pending {
+            updateLabel.stringValue = "⬆ \(release.version) is available — you have \(AppVersion.current)"
+        } else if let last = Update.loadState().lastCheck {
+            updateLabel.stringValue = "✓ \(AppVersion.current) is current — checked \(Update.ago(last))"
+        } else {
+            updateLabel.stringValue = "Version \(AppVersion.current)"
+        }
+    }
+
+    @objc private func openReleasePage() {
+        let url = Update.pending.flatMap { URL(string: $0.url) } ?? Update.releasesPage
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func openPrivacySettings() {
@@ -290,6 +381,7 @@ final class SettingsWindowController: NSWindowController {
         archiveCheck.isEnabled = !on
         deletePopUp.isEnabled = !on
         newFileCheck.isEnabled = !on
+        updateCheckBox.isEnabled = !on
         on ? busy.startAnimation(nil) : busy.stopAnimation(nil)
     }
 

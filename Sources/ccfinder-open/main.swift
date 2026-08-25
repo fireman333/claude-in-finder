@@ -342,6 +342,7 @@ if CommandLine.arguments.contains("--request-access") {
 final class AgentDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
     private var watcher: Watcher?
+    private var updateTimer: Timer?
     /// servicesProvider is held unowned, so the provider has to be kept alive here.
     private let services = AppDelegate()
 
@@ -355,6 +356,32 @@ final class AgentDelegate: NSObject, NSApplicationDelegate {
         // The first pass reads several hundred files; keep it off the main thread
         // so the menu bar item appears immediately.
         DispatchQueue.global(qos: .utility).async { watcher.start() }
+
+        scheduleUpdateChecks()
+    }
+
+    /// The agent is the process that is always running, so it is the one that can
+    /// notice a release without anybody opening anything. Every tick is a file
+    /// read unless a day has passed and the setting is on.
+    private func scheduleUpdateChecks() {
+        // Not at launch: login is the worst moment to add a network call, and the
+        // answer keeps for a day either way.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in self?.checkForUpdate() }
+        let timer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
+            self?.checkForUpdate()
+        }
+        timer.tolerance = 5 * 60
+        updateTimer = timer
+    }
+
+    private func checkForUpdate() {
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let outcome = Update.checkIfDue() else { return }
+            if case .available(let release) = outcome {
+                AppLog.write("update available: \(release.version) — \(release.url)")
+            }
+            DispatchQueue.main.async { self?.statusItem?.refreshUpdateBadge() }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

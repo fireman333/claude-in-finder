@@ -13,6 +13,7 @@ USAGE
   ccfinder unarchive <file...>                   bring archived sessions back
   ccfinder delete <file...> --yes                delete session records
   ccfinder config [layout|archive|on-delete] [v] show or change settings
+  ccfinder update [--if-due]                     check GitHub for a newer release
   ccfinder doctor                                report what it can and cannot see
 
 Sessions are mirrored into a "Claude Sessions" folder inside the directory each
@@ -170,6 +171,7 @@ case "config":
           ccfinder config layout workdir|central where session files are kept
           ccfinder config archive show|hide      whether the Archive folder is visible
           ccfinder config new-file show|hide      whether folders get a + New Session file
+          ccfinder config updates on|off         whether to check GitHub for new releases
           ccfinder config on-delete archive|delete  what deleting a file means
                                                  (from Archive it always deletes)
 
@@ -187,6 +189,8 @@ case "config":
         config.showArchive = (value == "show" || value == "on")
     case ("new-file", let value) where ["show", "hide", "on", "off"].contains(value):
         config.newSessionFile = (value == "show" || value == "on")
+    case ("updates", let value) where ["show", "hide", "on", "off"].contains(value):
+        config.updateCheck = (value == "show" || value == "on")
     case ("on-delete", let value):
         guard let action = Config.DeleteAction(rawValue: value) else {
             FileHandle.standardError.write(Data("on-delete must be archive or delete\n".utf8))
@@ -209,6 +213,35 @@ case "config":
     let updated = Mirror.fromConfig(verbose: verbose)
     if let stats = try? updated.reconcile() {
         print("moved \(stats.renamed), created \(stats.created), removed \(stats.removed)")
+    }
+
+case "update":
+    // --if-due is the scheduled check the background agent runs: it respects the
+    // setting and the once-a-day window, and says why when it does not look.
+    if args.contains("--if-due") {
+        guard Config.load().updateCheck else {
+            print("update checks are off — turn them on with 'ccfinder config updates on'")
+            break
+        }
+        guard Update.isDue else {
+            let last = Update.loadState().lastCheck.map { " (last checked \(Update.ago($0)))" } ?? ""
+            print("checked recently, not looking again\(last)")
+            break
+        }
+    }
+    do {
+        switch try Update.check() {
+        case .upToDate(let version):
+            print("up to date — \(version) is the latest release")
+        case .available(let release):
+            print("update available: \(release.version)   (this is \(AppVersion.current))")
+            if let name = release.name { print(name) }
+            print(release.url)
+        }
+    } catch {
+        FileHandle.standardError.write(
+            Data("could not check for updates: \(error.localizedDescription)\n".utf8))
+        exit(1)
     }
 
 case "doctor":

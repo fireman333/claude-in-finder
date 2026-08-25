@@ -80,6 +80,7 @@ Three ways in, whichever is nearest:
 | Show the Archive folder | visible · hidden (the files stay; open it from the right-click menu) |
 | Deleting a session file | archives the session · deletes it (from `Archive/` it always deletes) |
 | A `+ New Session` file in each folder | on · off (deleting one only affects its folder) |
+| Tell me when a new release is out | on · off (checks GitHub once a day) |
 
 Or from the command line:
 
@@ -88,6 +89,7 @@ ccfinder config                        # show current settings
 ccfinder config layout workdir|central
 ccfinder config archive show|hide
 ccfinder config on-delete archive|delete
+ccfinder config updates on|off
 ```
 
 Changing a setting rearranges the existing files immediately — by moving them, so
@@ -117,6 +119,28 @@ Two guards keep that from going wrong:
   Something that merely went missing might have been dragged somewhere the tool
   does not look, so an unconfirmed disappearance is downgraded to archiving — a
   nuisance you undo by dragging it back, rather than something you cannot.
+
+### Update reminders
+
+With **Tell me when a new release is out** on, the background agent asks GitHub
+once a day whether this project has a newer release. If it does, the menu bar
+icon grows a dot, the menu gains an **Update to 0.11.0…** item, and the Settings
+window says so — with a **Release Notes…** button that opens the release page.
+
+**Nothing is downloaded and nothing is installed.** Updating is still `install.sh`,
+which is deliberate: the app is ad-hoc signed, so every update re-grants folder
+access and the Finder extension by hand, and that is not something to start
+behind your back. A check that cannot reach GitHub says so rather than reporting
+"up to date", and tries again in an hour instead of a day.
+
+```bash
+ccfinder update            # check now and print the answer
+ccfinder update --if-due   # what the agent runs: obeys the setting and the daily window
+```
+
+The answer is cached in `~/Library/Application Support/ClaudeInFinder/update.json`,
+so opening the menu never waits on the network. Turning the setting off stops the
+scheduled check entirely; `ccfinder update` still answers when asked directly.
 
 The Settings window has a **Permissions** section showing whether folder access
 and the Finder menu are actually on, with buttons that jump straight to the right
@@ -149,6 +173,7 @@ ccfinder new .                # start a session in a folder
 ccfinder archive <file>       # archive a session (reversible)
 ccfinder unarchive <file>     # bring it back
 ccfinder delete <file> --yes  # delete the session record
+ccfinder update               # check GitHub for a newer release
 ccfinder doctor               # report what it can and cannot see
 ```
 
@@ -260,10 +285,13 @@ through the same resolver.
                               # and dragging in and out of Archive/
 ./Tests/config-test.sh        # both settings, including flag overrides
 ./Tests/multi-select-test.sh  # batch archive / unarchive / delete
+./Tests/update-test.sh        # version comparison, the daily window, the setting,
+                              # and that a failed check does not claim success
 ```
 
-Both run against a synthetic session directory via `CCF_SESSIONS`, so they never
-touch your real Claude data.
+They run against a synthetic session directory via `CCF_SESSIONS`, so they never
+touch your real Claude data; the update test reads a fixture through
+`CCF_UPDATE_API` rather than the network.
 
 ## Prior art
 

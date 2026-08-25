@@ -31,15 +31,20 @@ public struct Config: Codable, Equatable {
     /// Whether each folder gets a "+ New Session" file. Deleting one in Finder
     /// suppresses it for that folder alone; turning this back on restores them all.
     public var newSessionFile: Bool = true
+    /// Whether to look at GitHub once a day for a newer release. Nothing is ever
+    /// downloaded or installed — a new version is only reported.
+    public var updateCheck: Bool = true
 
     public init(layout: Layout = .workdir,
                 showArchive: Bool = true,
                 onFinderDelete: DeleteAction = .archive,
-                newSessionFile: Bool = true) {
+                newSessionFile: Bool = true,
+                updateCheck: Bool = true) {
         self.layout = layout
         self.showArchive = showArchive
         self.onFinderDelete = onFinderDelete
         self.newSessionFile = newSessionFile
+        self.updateCheck = updateCheck
     }
 
     // Older config files predate onFinderDelete; default it rather than failing
@@ -50,6 +55,7 @@ public struct Config: Codable, Equatable {
         showArchive = try c.decodeIfPresent(Bool.self, forKey: .showArchive) ?? true
         onFinderDelete = try c.decodeIfPresent(DeleteAction.self, forKey: .onFinderDelete) ?? .archive
         newSessionFile = try c.decodeIfPresent(Bool.self, forKey: .newSessionFile) ?? true
+        updateCheck = try c.decodeIfPresent(Bool.self, forKey: .updateCheck) ?? true
     }
 
     public static var url: URL { Paths.support.appendingPathComponent("config.json") }
@@ -83,6 +89,12 @@ public struct Config: Codable, Equatable {
         new-file     \(newSessionFile ? "show" : "hide")   \(newSessionFile
                         ? "(each folder gets a + New Session file)"
                         : "(no + New Session files)")
+
+        updates      \(updateCheck ? "on" : "off")   \(updateCheck
+                        ? "(checks GitHub daily for a newer release; installs nothing)"
+                        : "(never looks for a newer release)")
+
+        version      \(AppVersion.current)\(Update.pending.map { "   (\($0.version) is available)" } ?? "")
 
         config file  \(Self.url.path)
         """

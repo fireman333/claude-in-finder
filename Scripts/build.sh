@@ -9,7 +9,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-0.1.0}"
+# Sources/CCFKit/Update.swift is the single source of truth: the app reports the
+# same number it compares against GitHub, so an update check cannot be fooled by
+# a bundle that was stamped with a stale default.
+VERSION="${VERSION:-$(sed -n 's/.*static let value = "\(.*\)".*/\1/p' "$ROOT/Sources/CCFKit/Update.swift" | head -1)}"
 APP_NAME="Claude in Finder"
 BUNDLE_ID="com.klaude.claude-in-finder"
 UTI="com.klaude.claude-session"
