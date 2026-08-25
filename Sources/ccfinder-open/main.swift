@@ -158,6 +158,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if quitWhenDone { NSApp.terminate(nil) }
         }
 
+        // Copying is not destructive and needs no confirmation — and it works on
+        // "+ New Session" too, whose link opens a fresh session in that folder.
+        if verb == "copy" {
+            let links = files.compactMap { SessionFile.deepLink(for: $0)?.absoluteString }
+            guard !links.isEmpty else {
+                fail("Nothing here carries a Claude link.")
+                return
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(links.joined(separator: "\n"), forType: .string)
+            AppLog.write("copied \(links.count) link(s)")
+            if quitWhenDone { NSApp.terminate(nil) }
+            return
+        }
+
         let targets: [(url: URL, id: String)] = files.compactMap { url in
             guard let id = SessionFile.meta(in: url)["claude-desktop-id"], !id.isEmpty else { return nil }
             return (url, id)
@@ -200,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Parses ccfinder://archive?path=…&path=… into a verb and its files.
     static func controlRequest(from url: URL) -> (verb: String, files: [URL])? {
         guard url.scheme == "ccfinder",
-              let host = url.host, ["archive", "delete"].contains(host),
+              let host = url.host, ["archive", "delete", "copy"].contains(host),
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
         else { return nil }
         let files = items.filter { $0.name == "path" }

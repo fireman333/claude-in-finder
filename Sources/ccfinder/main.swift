@@ -9,6 +9,7 @@ USAGE
   ccfinder watch [options]                       stay running and sync on change
   ccfinder open <file.claudesession> [--dry-run] resume (or start) the session a file points at
   ccfinder new [folder] [--dry-run]              start a new session in a folder
+  ccfinder link <file...>                        print the claude:// link a file stands for
   ccfinder archive <file...>                     archive one or more sessions (reversible)
   ccfinder unarchive <file...>                   bring archived sessions back
   ccfinder delete <file...> --yes                delete session records
@@ -102,6 +103,24 @@ case "new":
     }
     Task { _ = await SessionFile.launch(target); exit(0) }
     RunLoop.main.run()
+
+case "link":
+    // Pipe it wherever you keep notes: `ccfinder link x.claudesession | pbcopy`.
+    guard !positional.isEmpty else {
+        FileHandle.standardError.write(Data("ccfinder link: need one or more .claudesession files\n".utf8))
+        exit(2)
+    }
+    var linkFailures = 0
+    for path in positional {
+        let file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        if let target = SessionFile.deepLink(for: file) {
+            print(target.absoluteString)
+        } else {
+            FileHandle.standardError.write(Data("no session in \(file.lastPathComponent)\n".utf8))
+            linkFailures += 1
+        }
+    }
+    if linkFailures > 0 { exit(1) }
 
 case "archive", "unarchive":
     guard !positional.isEmpty else {

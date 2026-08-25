@@ -13,7 +13,13 @@ public enum Paths {
     }
 
     /// Claude Code CLI transcripts: ~/.claude/projects/<slug>/<cli-session-uuid>.jsonl
-    public static let cliProjects = home.appendingPathComponent(".claude/projects")
+    /// Override with CCF_PROJECTS (used by the test harness).
+    public static var cliProjects: URL {
+        if let s = ProcessInfo.processInfo.environment["CCF_PROJECTS"], !s.isEmpty {
+            return URL(fileURLWithPath: (s as NSString).expandingTildeInPath)
+        }
+        return home.appendingPathComponent(".claude/projects")
+    }
 
     /// Where the Finder-visible mirror lives. Override with CCF_MIRROR.
     public static var mirror: URL {

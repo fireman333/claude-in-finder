@@ -56,6 +56,7 @@ final class ClaudeFinderSync: FIFinderSync {
             let selected = controller.selectedItemURLs() ?? []
             let sessions = selected.filter { $0.pathExtension == "claudesession" }
             if !sessions.isEmpty {
+                add(menu, "Copy Claude Link", #selector(copyLink))
                 add(menu, "Archive Claude Session", #selector(archive))
                 add(menu, "Delete Claude Session", #selector(delete))
             } else if selected.allSatisfy(isDirectory) {
@@ -115,12 +116,14 @@ final class ClaudeFinderSync: FIFinderSync {
         NSWorkspace.shared.open(archive)
     }
 
+    @objc private func copyLink() { send(verb: "copy") }
     @objc private func archive() { send(verb: "archive") }
     @objc private func delete() { send(verb: "delete") }
 
-    /// Destructive actions go to the app rather than happening here: the extension
-    /// has no business showing a confirmation sheet, and the app is already the
-    /// place that asks.
+    /// Actions go to the app rather than happening here: the extension has no
+    /// business showing a confirmation sheet, and the app is already the place
+    /// that asks. Copying goes the same way — a sandboxed extension is the wrong
+    /// place to reach for the pasteboard, and one path is easier to trust than two.
     private func send(verb: String) {
         let selected = FIFinderSyncController.default().selectedItemURLs() ?? []
         let sessions = selected.filter { $0.pathExtension == "claudesession" }

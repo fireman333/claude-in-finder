@@ -268,6 +268,7 @@ public struct Mirror {
                 stats.updated += 1
             }
 
+            stamp(dest, with: session)
             index.entries[session.desktopID] = Entry(path: dest.path, title: session.title, hash: hash)
         }
 
@@ -757,6 +758,31 @@ public struct Mirror {
         // Deliberately NOT atomic: an atomic write replaces the inode and would
         // drop the file's extended attributes, i.e. the user's Finder tags.
         try Data(s.utf8).write(to: url)
+    }
+
+    /// Gives the file the conversation's own dates.
+    ///
+    /// Without this, "Date Modified" in Finder is when the mirror last rewrote the
+    /// file — which is roughly the same recent moment for everything, and makes
+    /// sorting by date, the obvious way to find last week's session, meaningless.
+    /// The file stands for the conversation, so it should carry its dates.
+    ///
+    /// Skipped when they already match. Writing attributes fires an FSEvent, and
+    /// the watcher listening for it would sync again, stamp again, and never
+    /// settle.
+    private func stamp(_ url: URL, with session: Session) {
+        guard let modified = session.lastActivityAt ?? session.createdAt else { return }
+        let created = session.createdAt ?? modified
+
+        let current = try? fm.attributesOfItem(atPath: url.path)
+        func matches(_ attribute: FileAttributeKey, _ wanted: Date) -> Bool {
+            guard let have = current?[attribute] as? Date else { return false }
+            return abs(have.timeIntervalSince(wanted)) < 1
+        }
+        guard !(matches(.modificationDate, modified) && matches(.creationDate, created)) else { return }
+
+        try? fm.setAttributes([.modificationDate: modified, .creationDate: created],
+                              ofItemAtPath: url.path)
     }
 
     private func pruneEmptyParent(of url: URL) {

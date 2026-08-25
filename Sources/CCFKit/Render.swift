@@ -13,10 +13,20 @@ enum Render {
     static let maxCharsPerMessage = 4000
 
     static func html(for session: Session, transcript: URL?) -> String {
-        let messages = transcript.map { parse(jsonl: $0) } ?? []
+        let all = transcript.map { parse(jsonl: $0) } ?? []
+        // Keep the tail: the end of a conversation is what you need to recognise
+        // it. Say so when there is a head to keep, though — a preview that opens
+        // mid-conversation and does not admit it reads as a corrupted file.
+        let dropped = max(0, all.count - maxMessages)
+        let messages = dropped > 0 ? Array(all.suffix(maxMessages)) : all
+        let notice = dropped == 0 ? "" : """
+        <p class="truncated">\(dropped) earlier message\(dropped == 1 ? "" : "s") \
+        not shown — this preview keeps the last \(maxMessages). Open the session \
+        to read the whole conversation.</p>
+        """
         let body = messages.isEmpty
             ? "<p class=\"empty\">No messages to show — the transcript may have been removed.</p>"
-            : messages.map(renderMessage).joined()
+            : notice + messages.map(renderMessage).joined()
 
         let meta = """
         <meta charset="utf-8">
@@ -117,8 +127,6 @@ enum Render {
             }
         }
 
-        // Keep the tail: the end of a conversation is what you need to recognise it.
-        if out.count > maxMessages { out = Array(out.suffix(maxMessages)) }
         return out
     }
 
@@ -172,5 +180,7 @@ enum Render {
     .tools code { font-size:11px; padding:2px 7px; border-radius:5px;
                   background:var(--line); color:var(--dim); }
     .empty { color:var(--dim); }
+    .truncated { margin:0 0 14px; padding:9px 12px; border-radius:8px; font-size:12px;
+                 color:var(--dim); background:var(--user); border:1px solid var(--line); }
     """
 }

@@ -182,6 +182,7 @@ ccfinder new .                # start a session in a folder
 ccfinder archive <file>       # archive a session (reversible)
 ccfinder unarchive <file>     # bring it back
 ccfinder delete <file> --yes  # delete the session record
+ccfinder link <file>          # print the claude:// link a file stands for
 ccfinder update               # check GitHub for a newer release
 ccfinder doctor               # report what it can and cannot see
 ```
@@ -196,6 +197,34 @@ Useful flags for `sync` and `watch`:
 | `--no-prune` | never delete a mirrored file |
 
 `CCF_MIRROR` moves the fallback root away from `~/Claude Sessions`.
+
+## Searching, dates and links
+
+**Spotlight indexes the conversations.** The same UTI conformance that buys the
+Quick Look preview also hands the file to the system's rich-text importer, so
+every word either of you typed is in the index. Type a phrase into the Finder
+search box — or Spotlight — and the session it came from turns up as a file you
+can open. Nothing extra is installed for this; `ccfinder doctor` reports whether
+the volume is actually being indexed, since that check silently answers nothing
+when it is not.
+
+**The file carries the conversation's dates.** Modification date is the session's
+last activity and creation date is when it started, not when the mirror last
+wrote the file — so sorting a folder by date in Finder sorts your conversations
+by when you were last in them. Re-stamping is skipped when the dates already
+match: writing them fires an FSEvent, and the watcher listening for it would
+otherwise sync, stamp, and never settle.
+
+**Every file can hand back its link.** Right-click → **Copy Claude Link** puts
+`claude://resume?session=…` on the pasteboard, which is worth pasting into
+whatever you keep notes in — clicking it later reopens that exact conversation.
+On a `+ New Session` file you get the `claude://code/new?folder=…` link for that
+folder instead. From the command line it is `ccfinder link <file>`, which pairs
+with `pbcopy`.
+
+**A long conversation says what it is not showing.** The preview keeps the last
+300 messages, because the end of a conversation is what you recognise it by, and
+opens with a line saying how many earlier ones it left out.
 
 ## Archiving and deleting
 
@@ -296,11 +325,14 @@ through the same resolver.
 ./Tests/multi-select-test.sh  # batch archive / unarchive / delete
 ./Tests/update-test.sh        # version comparison, the daily window, the setting,
                               # and that a failed check does not claim success
+./Tests/preview-test.sh       # the file's own dates, the truncation notice,
+                              # and the claude:// link it hands back
 ```
 
 They run against a synthetic session directory via `CCF_SESSIONS`, so they never
 touch your real Claude data; the update test reads a fixture through
-`CCF_UPDATE_API` rather than the network.
+`CCF_UPDATE_API` rather than the network, and the preview test points
+`CCF_PROJECTS` at a synthetic transcript.
 
 ## Prior art
 

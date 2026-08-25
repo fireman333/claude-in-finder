@@ -77,11 +77,56 @@ public enum Doctor {
         check("Finder menu extension", ext.enabled,
               ext.detail.isEmpty ? "registered and in use" : ext.detail)
 
+        // Searching your conversations from Finder comes free with the same UTI
+        // trick that gives Quick Look previews: the file is HTML, so the system's
+        // RichText importer reads every word of it. Worth checking, because it
+        // silently does nothing at all when the volume is not being indexed.
+        let spotlight = spotlightState(probe: probe)
+        check("Spotlight search", spotlight.ok, spotlight.detail)
+        if !spotlight.ok {
+            print("    ↳ turn indexing on (asks for your password): sudo mdutil -i on /")
+        }
+
         let status = launchdStatus(label: "com.klaude.ccfinder")
         check("Sync agent running", status.running,
               status.detail.isEmpty
                   ? "not loaded — run: launchctl bootstrap gui/$(id -u) \(agent.path)"
                   : status.detail)
+    }
+
+    /// Two questions, because either one alone is misleading: is the volume being
+    /// indexed at all, and did this particular file actually make it in?
+    private static func spotlightState(probe: URL?) -> (ok: Bool, detail: String) {
+        let state = run("/usr/bin/mdutil", ["-s", "/"])
+        guard state.contains("Indexing enabled") else {
+            return (false, "indexing is off for this volume — conversations cannot be searched")
+        }
+        guard let probe else { return (true, "indexing on; no session file to probe") }
+
+        // Ask for the file by name inside its own folder: if the index knows it,
+        // it knows its contents too, and searching a phrase from a conversation
+        // in Finder will find it.
+        let folder = probe.deletingLastPathComponent().path
+        let name = probe.deletingPathExtension().lastPathComponent
+        let found = run("/usr/bin/mdfind", ["-onlyin", folder, "-name", name])
+        if found.contains(probe.lastPathComponent) {
+            return (true, "conversations are searchable in Finder")
+        }
+        return (true, "indexing on, but this file is not in the index yet — "
+                    + "it may still be catching up")
+    }
+
+    private static func run(_ tool: String, _ arguments: [String]) -> String {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: tool)
+        task.arguments = arguments
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do { try task.run() } catch { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     /// The contextual-menu items come from a Finder Sync extension. pluginkit
