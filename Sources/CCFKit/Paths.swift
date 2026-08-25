@@ -32,12 +32,23 @@ public enum Paths {
     }
 
     /// Override with CCF_INDEX so a test run never touches the real install's state.
-    /// Override with CCF_TRASH for tests.
-    public static var trash: URL {
+    /// Every place a deleted file might have landed. Override with CCF_TRASH for
+    /// tests. iCloud-synced folders use their own trash, not the home one.
+    public static var trashLocations: [URL] {
         if let s = ProcessInfo.processInfo.environment["CCF_TRASH"], !s.isEmpty {
-            return URL(fileURLWithPath: (s as NSString).expandingTildeInPath)
+            return [URL(fileURLWithPath: (s as NSString).expandingTildeInPath)]
         }
-        return home.appendingPathComponent(".Trash")
+        var out = [home.appendingPathComponent(".Trash")]
+        let cloud = home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/.Trash")
+        if FileManager.default.fileExists(atPath: cloud.path) { out.append(cloud) }
+        if let volumes = try? FileManager.default.contentsOfDirectory(
+            at: URL(fileURLWithPath: "/Volumes"), includingPropertiesForKeys: nil) {
+            for volume in volumes {
+                let t = volume.appendingPathComponent(".Trashes/\(getuid())")
+                if FileManager.default.fileExists(atPath: t.path) { out.append(t) }
+            }
+        }
+        return out
     }
 
     public static var indexFile: URL {

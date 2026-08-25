@@ -43,6 +43,13 @@ public struct Mirror {
     public var onFinderDelete: Config.DeleteAction = .archive
 
     let fm = FileManager.default
+    /// Scanned at most once per reconcile.
+    private let trashBox = TrashBox()
+    private final class TrashBox: @unchecked Sendable { var ids: Set<String>? }
+    private var trashCache: Set<String>? {
+        get { trashBox.ids }
+        nonmutating set { trashBox.ids = newValue }
+    }
 
     public init(skipArchived: Bool, prune: Bool, verbose: Bool,
                 central: Bool = false, gitExclude: Bool = true,
@@ -81,9 +88,10 @@ public struct Mirror {
     public func reconcile() throws -> (created: Int, renamed: Int, updated: Int, removed: Int) {
         try fm.createDirectory(at: Paths.support, withIntermediateDirectories: true)
 
+        trashCache = nil
         var index = loadIndex()
         var sessions = Discovery.sessions()
-        applyUserIntent(index: index, sessions: sessions)
+        applyUserIntent(index: index)
 
         // Intent may have changed archive flags or removed records; re-read so the
         // pass below works from what Claude's records now actually say.
@@ -101,7 +109,32 @@ public struct Mirror {
 
         // Newest first so that, on a filename clash, the session you touched most
         // recently keeps the clean name and the older one gets the suffix.
-        for session in sessions.sorted(by: { $0.sortDate > $1.sortDate }) {
+        let scan = scanMirrorDetailed()
+        var deleted = Set<String>()
+
+        for var session in sessions.sorted(by: { $0.sortDate > $1.sortDate }) {
+            // Did the user throw this session's file away? Decide it here rather
+            // than in an earlier pass: a file deleted while that pass was running
+            // is still present when it looks, and gets quietly recreated below —
+            // after which it never looks deleted again.
+            if let previous = index.entries[session.desktopID],
+               vanished(entry: previous, id: session.desktopID, scan: scan) {
+                switch effectiveDeleteAction(for: session.desktopID, scan: scan) {
+                case .archive:
+                    if !session.isArchived {
+                        try? SessionStore.archive(desktopID: session.desktopID, archived: true)
+                        session.isArchived = true
+                        log("archived (file deleted in Finder): \(session.title)")
+                    }
+                case .delete:
+                    try? SessionStore.delete(desktopID: session.desktopID)
+                    log("deleted (file deleted in Finder): \(session.title)")
+                    deleted.insert(session.desktopID)
+                    index.entries.removeValue(forKey: session.desktopID)
+                    continue
+                }
+            }
+
             live.insert(session.desktopID)
 
             let root = self.root(for: session, fallbackNames: fallbackNames)
@@ -367,32 +400,8 @@ public struct Mirror {
     /// that follows then agrees with where the file already is, so nothing moves
     /// back and forth. Moves that do not cross that boundary are ignored, and the
     /// file is returned to its place by the normal pass.
-    private func applyUserIntent(index: Index, sessions: [Session]) {
-        let (found, listed) = scanMirrorDetailed()
-
-        // Deleting a session file in Finder is an instruction, but only actual
-        // deletion counts: the file has to be in the Trash. A file that merely went
-        // missing may have been dragged somewhere we do not look, or sit in a folder
-        // we were denied access to — reading either as "delete this session" would
-        // be destructive over a guess. Both are handled the old way instead: the
-        // next pass simply puts the file back.
-        let trashed = trashedSessionIDs()
-        let known = Set(sessions.map(\.desktopID))
-        for (id, entry) in index.entries where found[id] == nil {
-            guard known.contains(id), trashed.contains(id) else { continue }
-            let parent = (entry.path as NSString).deletingLastPathComponent
-            guard listed.contains(parent) else { continue }
-
-            switch onFinderDelete {
-            case .archive:
-                guard !Self.isInArchive(entry.path) else { continue }
-                try? SessionStore.archive(desktopID: id, archived: true)
-                log("archived (file removed in Finder): \(entry.title)")
-            case .delete:
-                try? SessionStore.delete(desktopID: id)
-                log("deleted (file removed in Finder): \(entry.title)")
-            }
-        }
+    private func applyUserIntent(index: Index) {
+        let found = scanMirror()
 
         for (id, entry) in index.entries {
             guard let current = found[id], current.path != entry.path else { continue }
@@ -413,15 +422,46 @@ public struct Mirror {
         (path as NSString).pathComponents.dropLast().last == archiveFolderName
     }
 
+    /// True when a session's mirrored file is no longer anywhere we look.
+    ///
+    /// Requires the folder it lived in to have answered this pass: a folder macOS
+    /// refused to let us read also looks empty, and treating that as "every session
+    /// in it was deleted" would be a disaster.
+    private func vanished(entry: Entry, id: String,
+                          scan: (found: [String: URL], listed: Set<String>)) -> Bool {
+        guard scan.found[id] == nil else { return false }
+        guard !fm.fileExists(atPath: entry.path) else { return false }
+        let parent = Self.normalize(URL(fileURLWithPath: entry.path).deletingLastPathComponent()).path
+        return scan.listed.contains(parent)
+    }
+
+    /// Deleting the session outright needs proof — the file actually in the Trash.
+    ///
+    /// A file that is merely gone might have been dragged somewhere we do not look.
+    /// Archiving that is a nuisance you can undo by dragging it back; deleting it
+    /// is not, so an unconfirmed disappearance is always downgraded to archiving.
+    private func effectiveDeleteAction(for id: String,
+                                       scan: (found: [String: URL], listed: Set<String>))
+        -> Config.DeleteAction {
+        guard onFinderDelete == .delete else { return .archive }
+        if trashedSessionIDs().contains(id) { return .delete }
+        log("\(id) is gone but not in the Trash — archiving instead of deleting")
+        return .archive
+    }
+
     /// Session ids whose mirror file is sitting in the Trash.
     private func trashedSessionIDs() -> Set<String> {
-        guard let files = contents(of: Paths.trash) else { return [] }
+        if let cached = trashCache { return cached }
         var ids = Set<String>()
-        for file in files where file.pathExtension == "claudesession" {
-            if let id = SessionFile.meta(in: file)["claude-desktop-id"], !id.isEmpty {
-                ids.insert(id)
+        for dir in Paths.trashLocations {
+            guard let files = contents(of: dir) else { continue }
+            for file in files where file.pathExtension == "claudesession" {
+                if let id = SessionFile.meta(in: file)["claude-desktop-id"], !id.isEmpty {
+                    ids.insert(id)
+                }
             }
         }
+        trashCache = ids
         return ids
     }
 

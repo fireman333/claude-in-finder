@@ -90,14 +90,44 @@ mv "$WORKDIR/Claude Sessions/Archive/Live one.claudesession" "$CCF_TRASH/"
 [ -f "$CCF_SESSIONS/deleted_11111111-1111-1111-1111-111111111111" ] || fail "no tombstone written"
 [ -f "$CCF_SUPPORT/deleted/local_11111111-1111-1111-1111-111111111111.json" ] || fail "no backup kept"
 
-echo "10. moving a file out of the mirror is not read as a deletion"
-#     only the Trash counts; anything else may just have been dragged away
+echo "10. a file that vanished without reaching the Trash is archived, never deleted"
+#     it may have been dragged somewhere we do not look; archiving is undoable
 "$CCFINDER" config on-delete delete >/dev/null
 OTHER="$TMP/moved-away"; mkdir -p "$OTHER"
-mv "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" "$OTHER/" 2>/dev/null || true
+mv "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" "$OTHER/"
 "$CCFINDER" sync >/dev/null
-[ -f "$CCF_SESSIONS/local_22222222-2222-2222-2222-222222222222.json" ] \
-  || fail "a file moved elsewhere was treated as a deletion"
+REC2="$CCF_SESSIONS/local_22222222-2222-2222-2222-222222222222.json"
+[ -f "$REC2" ] || fail "an unconfirmed disappearance deleted the session"
+python3 -c "
+import json,sys
+sys.exit(0 if json.load(open('$REC2')).get('isArchived') is True else 1)" \
+  || fail "it should have been archived instead"
+
+echo "11. deleting without the Trash still archives (the common real case)"
+#     Finder does not always leave a copy behind, and the sync agent may recreate
+#     the file before it ever sees one; neither may stop the delete registering
+"$CCFINDER" config on-delete archive >/dev/null
+make_third() {
+  cat > "$CCF_SESSIONS/local_33333333-3333-3333-3333-333333333333.json" <<JSON
+{"sessionId":"local_33333333-3333-3333-3333-333333333333",
+ "cliSessionId":"33333333-3333-3333-3333-333333333333","cwd":"$WORKDIR",
+ "title":"Third one","titleSource":"user","isArchived":false,
+ "createdAt":1780000000000,"lastActivityAt":1780000003000}
+JSON
+}
+make_third
+"$CCFINDER" sync >/dev/null
+THIRD="$WORKDIR/Claude Sessions/Third one.claudesession"
+[ -f "$THIRD" ] || fail "setup: Third one not mirrored"
+rm "$THIRD"                       # no Trash copy at all
+"$CCFINDER" sync >/dev/null
+python3 -c "
+import json,sys
+d=json.load(open('$CCF_SESSIONS/local_33333333-3333-3333-3333-333333333333.json'))
+sys.exit(0 if d.get('isArchived') is True else 1)" || fail "a plain removal did not archive the session"
+[ -f "$WORKDIR/Claude Sessions/Archive/Third one.claudesession" ] \
+  || fail "it should have reappeared under Archive/"
+[ ! -f "$THIRD" ] || fail "it was recreated in the live folder instead"
 
 echo
 echo "PASS — settings take effect immediately, hiding keeps the files,"

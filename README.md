@@ -90,10 +90,20 @@ Hiding the Archive folder sets its hidden flag rather than dropping the files, s
 the archived sessions are still there and **Open Claude Archive Folder** can reach
 them.
 
-Deleting a session file only counts when the file actually reaches the Trash. A
-file that merely went missing — dragged somewhere unexpected, or sitting in a
-folder macOS would not let the agent read — is put back on the next pass instead,
-because acting destructively on a guess is not worth the convenience.
+A session file that is gone from its folder counts as deleted, whether or not it
+left a copy in the Trash — Finder does not always leave one, and the sync agent
+may replace the file before it ever sees one. The check happens at the moment the
+file would be recreated, so a deletion that lands mid-sync is not missed.
+
+Two guards keep that from going wrong:
+
+- The folder must have answered this pass. A folder macOS will not let the agent
+  read also looks empty, and reading that as "every session in it was deleted"
+  would be a disaster.
+- **Deleting the session outright needs the file to actually be in the Trash.**
+  Something that merely went missing might have been dragged somewhere the tool
+  does not look, so an unconfirmed disappearance is downgraded to archiving — a
+  nuisance you undo by dragging it back, rather than something you cannot.
 
 ## Full Disk Access
 

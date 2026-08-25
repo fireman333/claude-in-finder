@@ -71,14 +71,23 @@ python3 -c "
 import json,sys
 sys.exit(0 if json.load(open('$REC')).get('isArchived') in (False,None) else 1)" || fail "dragging out did not unarchive"
 
-echo "3d. a move that does not cross Archive is undone, not obeyed"
-OTHER="$TMP/elsewhere"; mkdir -p "$OTHER"
-mv "$FILE" "$OTHER/"
+echo "3d. a sideways move inside the mirror is undone, not obeyed"
+#     moved to another project's folder, so it is still visible to the scan and
+#     therefore a move rather than a disappearance
+OTHER_WORK="$TMP/other-proj"; mkdir -p "$OTHER_WORK/Claude Sessions"
+cat > "$CCF_SESSIONS/local_cccc.json" <<JSON
+{"sessionId":"local_cccc","cliSessionId":"cccccccc-dddd-eeee-ffff-000000000000",
+ "cwd":"$OTHER_WORK","title":"Neighbour","titleSource":"user","isArchived":false,
+ "createdAt":1780000000000,"lastActivityAt":1780000000500}
+JSON
 "$CCFINDER" sync >/dev/null
-[ -f "$FILE" ] || fail "session was not restored to its folder"
+mv "$FILE" "$OTHER_WORK/Claude Sessions/"
+"$CCFINDER" sync >/dev/null
+[ -f "$FILE" ] || fail "the session was not put back in its own folder"
 python3 -c "
 import json,sys
-sys.exit(0 if json.load(open('$REC')).get('isArchived') in (False,None) else 1)" || fail "an unrelated move changed the archive state"
+sys.exit(0 if json.load(open('$REC')).get('isArchived') in (False,None) else 1)" \
+  || fail "a sideways move changed the archive state"
 
 echo "4. delete refuses without --yes"
 "$CCFINDER" delete "$FILE" >/dev/null 2>&1 && fail "delete ran without --yes"

@@ -59,7 +59,7 @@ public struct Session {
     let cwd: String
     let title: String
     let titleSource: String?     // "user" | "auto" | nil
-    public let isArchived: Bool
+    public internal(set) var isArchived: Bool
     let createdAt: Date?
     let lastActivityAt: Date?
     let model: String?
