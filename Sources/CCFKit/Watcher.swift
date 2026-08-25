@@ -1,5 +1,4 @@
 import Foundation
-import CCFKit
 import CoreServices
 
 /// Watches Claude Desktop's session directory and re-syncs on change.
@@ -8,20 +7,49 @@ import CoreServices
 /// archived or used, so a file-level watch on that one directory covers every
 /// event we care about. A slow full reconcile still runs periodically in case
 /// an event is ever missed.
-final class Watcher {
+public final class Watcher {
     private let mirror: Mirror
     private let debounce: TimeInterval
     private let queue = DispatchQueue(label: "com.klaude.ccfinder.watch")
     private var pending: DispatchWorkItem?
     private var stream: FSEventStreamRef?
+    private var timer: DispatchSourceTimer?
+    private var watched: [String] = []
 
-    init(mirror: Mirror, debounce: TimeInterval = 1.5) {
+    public init(mirror: Mirror, debounce: TimeInterval = 1.5) {
         self.mirror = mirror
         self.debounce = debounce
     }
 
-    func run(fullResyncEvery: TimeInterval = 300) {
+    public func run(fullResyncEvery: TimeInterval = 300) {
         sync(reason: "startup")
+        restartStream()
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + fullResyncEvery, repeating: fullResyncEvery)
+        timer.setEventHandler { [weak self] in self?.sync(reason: "periodic") }
+        timer.resume()
+        self.timer = timer
+
+        RunLoop.main.run()
+    }
+
+    /// Watches Claude's session directory *and* every mirror folder, so that
+    /// dragging a file into or out of Archive is picked up as quickly as a change
+    /// made inside Claude. The set of mirror folders grows as you work in new
+    /// projects, so the stream is rebuilt whenever it changes.
+    private func restartStream() {
+        let paths = mirror.watchPaths()
+        guard paths != watched else { return }
+        watched = paths
+
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            self.stream = nil
+        }
+        guard !paths.isEmpty else { return }
 
         let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info else { return }
@@ -34,28 +62,21 @@ final class Watcher {
             retain: nil, release: nil, copyDescription: nil
         )
 
-        let paths = [Paths.desktopSessions.path] as CFArray
         let flags = FSEventStreamCreateFlags(
             kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer
         )
 
-        guard let stream = FSEventStreamCreate(
-            kCFAllocatorDefault, callback, &context, paths,
+        guard let created = FSEventStreamCreate(
+            kCFAllocatorDefault, callback, &context, paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5, flags
         ) else {
-            FileHandle.standardError.write(Data("ccfinder: could not start FSEvents\n".utf8))
-            exit(1)
+            Log.line("could not start FSEvents for \(paths.count) path(s)")
+            return
         }
-        self.stream = stream
-        FSEventStreamSetDispatchQueue(stream, queue)
-        FSEventStreamStart(stream)
-
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + fullResyncEvery, repeating: fullResyncEvery)
-        timer.setEventHandler { [weak self] in self?.sync(reason: "periodic") }
-        timer.resume()
-
-        RunLoop.main.run()
+        stream = created
+        FSEventStreamSetDispatchQueue(created, queue)
+        FSEventStreamStart(created)
+        Log.line("watching \(paths.count) folder(s)")
     }
 
     private func schedule() {
@@ -71,14 +92,16 @@ final class Watcher {
             if s.created + s.renamed + s.updated + s.removed > 0 {
                 Log.line("[\(reason)] +\(s.created) ~\(s.updated) ↻\(s.renamed) -\(s.removed)")
             }
+            // New project folders appear as you work; follow them.
+            restartStream()
         } catch {
             Log.line("[\(reason)] sync failed: \(error.localizedDescription)")
         }
     }
 }
 
-enum Log {
-    static func line(_ msg: String) {
+public enum Log {
+    public static func line(_ msg: String) {
         let df = ISO8601DateFormatter()
         let text = "\(df.string(from: Date())) \(msg)\n"
         FileHandle.standardError.write(Data(text.utf8))

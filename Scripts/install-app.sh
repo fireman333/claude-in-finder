@@ -43,6 +43,38 @@ echo "==> linking CLI to $BIN_DIR/ccfinder"
 mkdir -p "$BIN_DIR"
 ln -sf "$DEST_APP/Contents/Resources/ccfinder" "$BIN_DIR/ccfinder"
 
+# macOS hides third-party services from the Finder context menu until they are
+# explicitly enabled; a freshly installed service is simply absent from
+# NSServicesStatus and therefore never drawn. Opt ours in.
+#
+# The values have to be real booleans, which the old-style plist syntax that
+# `defaults -dict-add` accepts cannot express, so round-trip the domain through
+# export/import instead of editing the file behind cfprefsd's back.
+echo "==> enabling Finder services"
+defaults export pbs - 2>/dev/null | python3 -c '
+import plistlib, sys
+
+data = sys.stdin.buffer.read()
+prefs = plistlib.loads(data) if data.strip() else {}
+statuses = prefs.setdefault("NSServicesStatus", {})
+
+for title, message in [
+    ("New Claude Session Here", "newSessionHere"),
+    ("Archive Claude Session", "archiveSession"),
+    ("Delete Claude Session", "deleteSession"),
+]:
+    statuses[f"com.klaude.claude-in-finder - {title} - {message}"] = {
+        "enabled_context_menu": True,
+        "enabled_services_menu": True,
+        "presentation_modes": {"ContextMenu": True, "ServicesMenu": True},
+    }
+
+sys.stdout.buffer.write(plistlib.dumps(prefs))
+' | defaults import pbs -
+
+/System/Library/CoreServices/pbs -flush 2>/dev/null || true
+/System/Library/CoreServices/pbs -update 2>/dev/null || true
+
 echo "==> installing sync agent"
 mkdir -p "$HOME/Library/Application Support/ClaudeInFinder" "$HOME/Library/LaunchAgents"
 cat > "$AGENT" <<PLIST
@@ -53,8 +85,8 @@ cat > "$AGENT" <<PLIST
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$DEST_APP/Contents/Resources/ccfinder</string>
-    <string>watch</string>
+    <string>$DEST_APP/Contents/MacOS/ccfinder-open</string>
+    <string>--watch</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

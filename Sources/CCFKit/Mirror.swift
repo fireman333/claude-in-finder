@@ -1,5 +1,4 @@
 import Foundation
-import CCFKit
 import CryptoKit
 
 /// Mirrors Claude Desktop's sessions as .claudesession files.
@@ -12,10 +11,12 @@ import CryptoKit
 /// State is kept in index.json so that a retitled session becomes a *move* of
 /// the existing file rather than a delete + create. That matters: moving keeps
 /// the file's Finder tags, comments and any aliases the user made to it.
-struct Mirror {
+public struct Mirror {
 
     /// Name of the per-project folder dropped inside each working directory.
     static let folderName = SessionFile.mirrorFolderName
+    /// Sessions archived in Claude are kept, but tucked one level down.
+    static let archiveFolderName = "Archive"
 
     struct Entry: Codable {
         var path: String      // absolute since v2; relative to the mirror root in v1
@@ -28,28 +29,55 @@ struct Mirror {
         var entries: [String: Entry] = [:]   // keyed by desktop session id
     }
 
-    var includeArchived: Bool
-    var prune: Bool
-    var verbose: Bool
+    /// Leave archived sessions out of the mirror entirely.
+    public var skipArchived: Bool
+    public var prune: Bool
+    public var verbose: Bool
     /// Put everything under the central mirror instead of inside working directories.
-    var central: Bool = false
+    public var central: Bool = false
     /// Add "Claude Sessions/" to .git/info/exclude so the files stay out of git status.
-    var gitExclude: Bool = true
+    public var gitExclude: Bool = true
 
     let fm = FileManager.default
+
+    public init(skipArchived: Bool, prune: Bool, verbose: Bool,
+                central: Bool = false, gitExclude: Bool = true) {
+        self.skipArchived = skipArchived
+        self.prune = prune
+        self.verbose = verbose
+        self.central = central
+        self.gitExclude = gitExclude
+    }
+
+    /// Builds a mirror from the saved settings, with optional per-run overrides.
+    public static func fromConfig(forceCentral: Bool = false,
+                                  forceSkipArchived: Bool = false,
+                                  prune: Bool = true,
+                                  gitExclude: Bool = true,
+                                  verbose: Bool = false) -> Mirror {
+        let config = Config.load()
+        return Mirror(
+            skipArchived: forceSkipArchived || !config.showArchive,
+            prune: prune,
+            verbose: verbose,
+            central: forceCentral || config.layout == .central,
+            gitExclude: gitExclude
+        )
+    }
 
     // MARK: - Entry point
 
     @discardableResult
-    func reconcile() throws -> (created: Int, renamed: Int, updated: Int, removed: Int) {
+    public func reconcile() throws -> (created: Int, renamed: Int, updated: Int, removed: Int) {
         try fm.createDirectory(at: Paths.support, withIntermediateDirectories: true)
 
         var index = loadIndex()
+        applyDragIntent(index: index)
         adoptOrphans(into: &index)
         let transcripts = Discovery.transcriptIndex()
 
         var sessions = Discovery.sessions()
-        if !includeArchived { sessions.removeAll { $0.isArchived } }
+        if skipArchived { sessions.removeAll { $0.isArchived } }
 
         let fallbackNames = fallbackFolderNames(for: sessions)
         var stats = (created: 0, renamed: 0, updated: 0, removed: 0)
@@ -131,21 +159,29 @@ struct Mirror {
     // MARK: - Where a session's file belongs
 
     private func root(for session: Session, fallbackNames: [String: String]) -> URL {
-        if !central, !session.cwd.isEmpty {
+        let main = mainRoot(cwd: session.cwd, fallbackNames: fallbackNames)
+        return session.isArchived ? main.appendingPathComponent(Self.archiveFolderName) : main
+    }
+
+    /// The folder a project's live sessions go in. Archived ones sit one level
+    /// below it, which is what makes archiving from Finder a plain file move.
+    private func mainRoot(cwd: String, fallbackNames: [String: String]) -> URL {
+        if !central, !cwd.isEmpty {
             var isDir: ObjCBool = false
-            if fm.fileExists(atPath: session.cwd, isDirectory: &isDir), isDir.boolValue,
-               fm.isWritableFile(atPath: session.cwd) {
-                return Self.normalize(URL(fileURLWithPath: session.cwd)
+            if !Self.blocked.contains(cwd),
+               fm.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue,
+               fm.isWritableFile(atPath: cwd) {
+                return Self.normalize(URL(fileURLWithPath: cwd)
                     .appendingPathComponent(Self.folderName))
             }
         }
         if central {
-            return Self.normalize(Paths.mirror.appendingPathComponent(fallbackNames[session.cwd] ?? "Unknown"))
+            return Self.normalize(Paths.mirror.appendingPathComponent(fallbackNames[cwd] ?? "Unknown"))
         }
         // The working directory is gone; keep the session reachable anyway.
         return Self.normalize(Paths.mirror
             .appendingPathComponent("_Unavailable")
-            .appendingPathComponent(fallbackNames[session.cwd] ?? "Unknown"))
+            .appendingPathComponent(fallbackNames[cwd] ?? "Unknown"))
     }
 
     /// Folder name per distinct cwd, used only for the central mirror. Two projects
@@ -184,15 +220,18 @@ struct Mirror {
                                    fallbackNames: [String: String]) throws {
         var cwdByRoot: [URL: String] = [:]
         for s in sessions where !s.cwd.isEmpty {
-            cwdByRoot[root(for: s, fallbackNames: fallbackNames)] = s.cwd
+            cwdByRoot[mainRoot(cwd: s.cwd, fallbackNames: fallbackNames)] = s.cwd
         }
 
-        for dir in roots {
+        for dir in Set(roots.map { $0.lastPathComponent == Self.archiveFolderName
+                                   ? $0.deletingLastPathComponent() : $0 }) {
             guard fm.fileExists(atPath: dir.path) else { continue }
             guard let cwd = cwdByRoot[dir], !cwd.isEmpty else { continue }
 
-            try? cwd.write(to: dir.appendingPathComponent(".ccf-project"),
-                           atomically: true, encoding: .utf8)
+            let marker = dir.appendingPathComponent(".ccf-project")
+            if (try? String(contentsOf: marker, encoding: .utf8)) != cwd {
+                try? cwd.write(to: marker, atomically: true, encoding: .utf8)
+            }
 
             let opener = dir.appendingPathComponent("+ New Session.claudesession")
             let html = Self.newSessionHTML(cwd: cwd)
@@ -258,28 +297,162 @@ struct Mirror {
 
     // MARK: - Orphan recovery
 
+    /// Treats dragging a session in or out of the Archive folder as an
+    /// instruction to archive or unarchive it.
+    ///
+    /// A tracked file sitting somewhere other than where the index left it can
+    /// only have been moved by the user. When the move crossed the Archive
+    /// boundary we take it as intent and update Claude's record; the reconcile
+    /// that follows then agrees with where the file already is, so nothing moves
+    /// back and forth. Moves that do not cross that boundary are ignored, and the
+    /// file is returned to its place by the normal pass.
+    private func applyDragIntent(index: Index) {
+        let found = scanMirror()
+
+        for (id, entry) in index.entries {
+            guard let current = found[id], current.path != entry.path else { continue }
+            let was = Self.isInArchive(entry.path)
+            let now = Self.isInArchive(current.path)
+            guard was != now else { continue }
+
+            do {
+                try SessionStore.archive(desktopID: id, archived: now)
+                log("\(now ? "archived" : "unarchived") by drag: \(current.lastPathComponent)")
+            } catch {
+                log("drag intent failed for \(id): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    static func isInArchive(_ path: String) -> Bool {
+        (path as NSString).pathComponents.dropLast().last == archiveFolderName
+    }
+
+    /// Every mirrored file we can find, keyed by its desktop session id.
+    private func scanMirror() -> [String: URL] {
+        var out: [String: URL] = [:]
+        for dir in candidateFolders() {
+            guard let files = contents(of: dir) else { continue }
+            for file in files where file.pathExtension == "claudesession" {
+                let meta = SessionFile.meta(in: file)
+                guard let id = meta["claude-desktop-id"], !id.isEmpty else { continue }
+                out[id] = Self.normalize(file)
+            }
+        }
+        return out
+    }
+
+    /// Directories that did not answer, remembered so they are only waited on once.
+    ///
+    /// A folder macOS protects — Desktop, Documents, iCloud Drive — does not fail
+    /// for a background agent that has not been granted access: the `open` simply
+    /// never returns, because it is waiting on a consent prompt that a launchd job
+    /// has no way to show. `access()` is no help, since it reports the filesystem
+    /// permission bits and knows nothing about that. So the only reliable defence
+    /// is to put a clock on the call.
+    private final class Blocklist: @unchecked Sendable {
+        private let lock = NSLock()
+        private var paths: Set<String> = []
+
+        /// True for a blocked directory or anything beneath one, so a whole
+        /// protected tree costs one timeout rather than one per folder.
+        func contains(_ path: String) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if paths.contains(path) { return true }
+            return paths.contains { path.hasPrefix($0 + "/") }
+        }
+        func insert(_ path: String) {
+            lock.lock(); defer { lock.unlock() }
+            paths.insert(path)
+        }
+        var all: [String] {
+            lock.lock(); defer { lock.unlock() }
+            return paths.sorted()
+        }
+    }
+    private static let blocked = Blocklist()
+
+    /// Folders that stopped responding this run.
+    public static func blockedFolders() -> [String] { blocked.all }
+
+    /// Lists a directory, giving up if it does not answer in time.
+    ///
+    /// The worker thread stays parked on the stuck `open` — there is no way to
+    /// cancel it — but that costs one thread per bad folder, once, instead of the
+    /// whole agent.
+    func contents(of dir: URL, timeout: TimeInterval = 2) -> [URL]? {
+        if Self.blocked.contains(dir.path) { return nil }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox()
+        DispatchQueue.global(qos: .utility).async {
+            box.value = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: [.isDirectoryKey]
+            )
+            semaphore.signal()
+        }
+
+        guard semaphore.wait(timeout: .now() + timeout) == .success else {
+            let root = Self.highestBlockedAncestor(of: dir)
+            Self.blocked.insert(root)
+            Log.line("no access to \(root) — skipping it and everything under it")
+            return nil
+        }
+        return box.value ?? []
+    }
+
+    private final class ResultBox: @unchecked Sendable { var value: [URL]? }
+
+    /// Walks up from an unresponsive directory to find the top of the blocked
+    /// tree — usually a folder macOS protects, like Desktop or Documents — so the
+    /// whole subtree can be skipped after a single timeout.
+    private static func highestBlockedAncestor(of dir: URL) -> String {
+        let home = Paths.home.path
+        var candidate = dir.path
+        var probe = dir.deletingLastPathComponent().path
+
+        while probe.hasPrefix(home), probe != home, probe.count > home.count {
+            if respondsQuickly(probe) { break }
+            candidate = probe
+            probe = (probe as NSString).deletingLastPathComponent
+        }
+        return candidate
+    }
+
+    private static func respondsQuickly(_ path: String, timeout: TimeInterval = 1) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            _ = try? FileManager.default.contentsOfDirectory(atPath: path)
+            semaphore.signal()
+        }
+        return semaphore.wait(timeout: .now() + timeout) == .success
+    }
+
+    /// Directories the watcher should follow so that dragging a file is noticed.
+    public func watchPaths() -> [String] {
+        var paths = [Paths.desktopSessions.path]
+        let sessions = Discovery.sessions()
+        let names = fallbackFolderNames(for: sessions)
+        for cwd in Set(sessions.map(\.cwd)) {
+            let root = mainRoot(cwd: cwd, fallbackNames: names)
+            if contents(of: root) != nil { paths.append(root.path) }
+        }
+        if fm.fileExists(atPath: Paths.mirror.path) { paths.append(Paths.mirror.path) }
+        return Array(Set(paths)).sorted()
+    }
+
     /// Re-attaches mirror files whose index entry was lost — the state file is
     /// deleted on uninstall, and without this a reinstall would leave the old
     /// filename behind as an orphan the next time a session was retitled.
     /// Each file records its own desktop session id, so the index is rebuildable.
     private func adoptOrphans(into index: inout Index) {
-        var known = Set(index.entries.values.map(\.path))
-
-        for dir in candidateFolders() {
-            guard let files = try? fm.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: nil
-            ) else { continue }
-
-            for file in files where file.pathExtension == "claudesession" {
-                let path = Self.normalize(file).path
-                if known.contains(path) { continue }
-                let meta = SessionFile.meta(in: file)
-                guard let id = meta["claude-desktop-id"], !id.isEmpty else { continue }
-
-                // An empty hash guarantees the content is rewritten on this pass.
-                index.entries[id] = Entry(path: path, title: meta["claude-title"] ?? "", hash: "")
-                known.insert(path)
-            }
+        for (id, file) in scanMirror() {
+            // A tracked file that moved is handled by applyDragIntent and the main
+            // pass; only genuinely unknown ids need adopting here.
+            guard index.entries[id] == nil else { continue }
+            let meta = SessionFile.meta(in: file)
+            // An empty hash guarantees the content is rewritten on this pass.
+            index.entries[id] = Entry(path: file.path, title: meta["claude-title"] ?? "", hash: "")
         }
     }
 
@@ -291,13 +464,13 @@ struct Mirror {
         for cwd in Set(Discovery.sessions().map(\.cwd)) where !cwd.isEmpty {
             let dir = URL(fileURLWithPath: cwd).appendingPathComponent(Self.folderName)
             if fm.fileExists(atPath: dir.path) { out.append(dir) }
+            let archive = dir.appendingPathComponent(Self.archiveFolderName)
+            if fm.fileExists(atPath: archive.path) { out.append(archive) }
         }
 
         var stack = [Paths.mirror]
         while let dir = stack.popLast() {
-            guard let children = try? fm.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.isDirectoryKey]
-            ) else { continue }
+            guard let children = contents(of: dir) else { continue }
             out.append(dir)
             for child in children {
                 if (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
@@ -317,12 +490,21 @@ struct Mirror {
     }
 
     private func pruneEmptyParent(of url: URL) {
-        let dir = url.deletingLastPathComponent()
-        guard dir.lastPathComponent == Self.folderName || dir.path.hasPrefix(Paths.mirror.path) else { return }
-        guard dir.path != Paths.mirror.path else { return }
-        let remaining = (try? fm.contentsOfDirectory(atPath: dir.path))?
-            .filter { $0 != ".ccf-project" && $0 != "+ New Session.claudesession" && $0 != ".DS_Store" }
-        if remaining?.isEmpty == true { try? fm.removeItem(at: dir) }
+        var dir = url.deletingLastPathComponent()
+        // Walk up at most twice: out of Archive, then out of the mirror folder.
+        for _ in 0..<2 {
+            let name = dir.lastPathComponent
+            guard name == Self.folderName || name == Self.archiveFolderName
+                    || dir.path.hasPrefix(Paths.mirror.path) else { return }
+            guard dir.path != Paths.mirror.path else { return }
+
+            let remaining = (try? fm.contentsOfDirectory(atPath: dir.path))?
+                .filter { $0 != ".ccf-project" && $0 != "+ New Session.claudesession" && $0 != ".DS_Store" }
+            guard remaining?.isEmpty == true else { return }
+            let parent = dir.deletingLastPathComponent()
+            try? fm.removeItem(at: dir)
+            dir = parent
+        }
     }
 
     static func sanitize(_ raw: String) -> String {

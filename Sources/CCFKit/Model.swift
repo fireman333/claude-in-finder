@@ -1,5 +1,4 @@
 import Foundation
-import CCFKit
 
 // MARK: - Tolerant JSON access
 //

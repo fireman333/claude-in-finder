@@ -69,23 +69,33 @@ public enum SessionFile {
             dir = (dir as NSString).deletingLastPathComponent
         }
 
-        // The marker records the real working directory, including for folders
-        // under the central mirror whose name no longer resembles the path.
-        let marker = (dir as NSString).appendingPathComponent(".ccf-project")
-        if let raw = try? String(contentsOfFile: marker, encoding: .utf8) {
-            let real = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            var realIsDir: ObjCBool = false
-            if !real.isEmpty, fm.fileExists(atPath: real, isDirectory: &realIsDir), realIsDir.boolValue {
-                return real
+        // A marker records the real working directory. Walk up a couple of levels
+        // so this works from inside the Archive subfolder too, and so folders under
+        // the central mirror — whose names no longer resemble the path — resolve.
+        var probe = dir
+        for _ in 0..<3 {
+            let marker = (probe as NSString).appendingPathComponent(".ccf-project")
+            if let raw = try? String(contentsOfFile: marker, encoding: .utf8) {
+                let real = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                var realIsDir: ObjCBool = false
+                if !real.isEmpty, fm.fileExists(atPath: real, isDirectory: &realIsDir), realIsDir.boolValue {
+                    return real
+                }
             }
+            let parent = (probe as NSString).deletingLastPathComponent
+            if parent == probe || parent.isEmpty { break }
+            probe = parent
         }
 
-        // No marker yet (a folder we have not synced into): fall back to the name.
-        if (dir as NSString).lastPathComponent == mirrorFolderName {
-            let parent = (dir as NSString).deletingLastPathComponent
-            var parentIsDir: ObjCBool = false
-            if fm.fileExists(atPath: parent, isDirectory: &parentIsDir), parentIsDir.boolValue {
-                return parent
+        // No usable marker: cut the path at the mirror folder, which covers a
+        // freshly created folder we have not synced into yet.
+        var components = (dir as NSString).pathComponents
+        if let idx = components.lastIndex(of: mirrorFolderName), idx > 0 {
+            components = Array(components[0..<idx])
+            let candidate = NSString.path(withComponents: components)
+            var candidateIsDir: ObjCBool = false
+            if fm.fileExists(atPath: candidate, isDirectory: &candidateIsDir), candidateIsDir.boolValue {
+                return candidate
             }
         }
 

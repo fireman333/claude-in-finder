@@ -20,6 +20,8 @@ Sessions live next to the work they belong to:
 - **`+ New Session`** → starts a fresh session in that project, skipping the New screen.
 - **Right-click any folder** → Services → *New Claude Session Here*.
 - **Right-click a session** → Services → *Archive* or *Delete*.
+- **Drag a session into `Archive/`** → it is archived in Claude too. Drag it back
+  out to unarchive.
 
 In a git repository the folder is added to `.git/info/exclude`, so it never shows
 up in `git status` and never lands in a commit. Sessions whose working directory
@@ -55,6 +57,32 @@ Everything lands under your home directory — `~/Applications`, `~/.local/bin`,
 ./Scripts/uninstall.sh   # removes all of it; leaves ~/Claude Sessions alone
 ```
 
+## Settings
+
+```bash
+ccfinder config                     # show current settings
+ccfinder config layout workdir      # a Claude Sessions folder in each working directory
+ccfinder config layout central      # everything under ~/Claude Sessions
+ccfinder config archive show        # archived sessions appear in Archive/
+ccfinder config archive hide        # archived sessions are not mirrored at all
+```
+
+Changing a setting rearranges the existing files immediately — by moving them, so
+Finder tags survive — and the background agent picks the change up without a
+restart. Settings live in `~/Library/Application Support/ClaudeInFinder/config.json`.
+
+## Full Disk Access
+
+macOS protects Desktop, Documents and Downloads. A launchd agent cannot answer the
+consent prompt those folders trigger, so **grant Full Disk Access to
+"Claude in Finder"** in System Settings → Privacy & Security → Full Disk Access if
+your sessions run in any of them.
+
+Without it nothing breaks: the agent notices a folder is not answering, skips that
+whole tree, logs it, and keeps going. `ccfinder doctor` lists what it could not
+read. Running `ccfinder sync` from your own terminal also works, because your
+terminal already has access.
+
 ## Usage
 
 ```bash
@@ -71,8 +99,8 @@ Useful flags for `sync` and `watch`:
 
 | Flag | Effect |
 |---|---|
-| `--archived` | also mirror sessions you archived in Claude |
-| `--central` | keep everything under `~/Claude Sessions` instead of in working folders |
+| `--no-archived` | leave archived sessions out for this run |
+| `--central` | keep everything under `~/Claude Sessions` for this run |
 | `--no-git-exclude` | leave `.git/info/exclude` alone |
 | `--no-prune` | never delete a mirrored file |
 
@@ -93,6 +121,11 @@ Deleting is narrower than it sounds, on purpose:
 
 Claude Desktop caches sessions in memory, so a session archived or deleted from
 Finder while Claude is running may linger in its sidebar until you restart it.
+
+Dragging a file into or out of `Archive/` does the same thing. A tracked file
+found somewhere other than where the index left it can only have been moved by
+hand; when that move crossed the Archive boundary it is taken as intent. Moves
+that did not cross it are undone by the next sync.
 
 ## How it works
 
@@ -156,7 +189,9 @@ through the same resolver.
                               # missing folders, archiving, index recovery,
                               # new-session resolution from every entry point
 ./Tests/watch-test.sh         # FSEvents picks up creation and retitling live
-./Tests/archive-delete-test.sh # archive/delete against Claude's record format
+./Tests/archive-delete-test.sh # archive/delete against Claude's record format,
+                              # and dragging in and out of Archive/
+./Tests/config-test.sh        # both settings, including flag overrides
 ```
 
 Both run against a synthetic session directory via `CCF_SESSIONS`, so they never

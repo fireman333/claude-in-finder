@@ -50,6 +50,36 @@ p='$REC'; d=json.load(open(p)); d['isArchived']=False; json.dump(d,open(p,'w'))"
 "$CCFINDER" sync >/dev/null
 [ -f "$FILE" ] || fail "unarchived session not restored"
 
+echo "3b. dragging a file into Archive/ archives the session"
+mkdir -p "$WORKDIR/Claude Sessions/Archive"
+INODE="$(stat -f %i "$FILE")"
+mv "$FILE" "$WORKDIR/Claude Sessions/Archive/"
+"$CCFINDER" sync >/dev/null
+DRAGGED="$WORKDIR/Claude Sessions/Archive/Disposable session.claudesession"
+[ -f "$DRAGGED" ] || fail "dragged file did not stay in Archive/"
+[ ! -f "$FILE" ] || fail "the file came back to the live folder"
+python3 -c "
+import json,sys
+sys.exit(0 if json.load(open('$REC')).get('isArchived') is True else 1)" || fail "dragging in did not archive the session"
+[ "$INODE" = "$(stat -f %i "$DRAGGED")" ] || fail "the dragged file was recreated, not kept"
+
+echo "3c. dragging it back out unarchives it"
+mv "$DRAGGED" "$WORKDIR/Claude Sessions/"
+"$CCFINDER" sync >/dev/null
+[ -f "$FILE" ] || fail "file did not stay in the live folder"
+python3 -c "
+import json,sys
+sys.exit(0 if json.load(open('$REC')).get('isArchived') in (False,None) else 1)" || fail "dragging out did not unarchive"
+
+echo "3d. a move that does not cross Archive is undone, not obeyed"
+OTHER="$TMP/elsewhere"; mkdir -p "$OTHER"
+mv "$FILE" "$OTHER/"
+"$CCFINDER" sync >/dev/null
+[ -f "$FILE" ] || fail "session was not restored to its folder"
+python3 -c "
+import json,sys
+sys.exit(0 if json.load(open('$REC')).get('isArchived') in (False,None) else 1)" || fail "an unrelated move changed the archive state"
+
 echo "4. delete refuses without --yes"
 "$CCFINDER" delete "$FILE" >/dev/null 2>&1 && fail "delete ran without --yes"
 
@@ -70,4 +100,5 @@ echo "7. a deleted session does not come back on the next sync"
 
 echo
 echo "PASS — archive is reversible, delete matches Claude's tombstone format,"
-echo "       the record is backed up and nothing resurrects"
+echo "       dragging in and out of Archive/ works, the record is backed up,"
+echo "       and nothing resurrects"

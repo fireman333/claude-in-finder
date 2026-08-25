@@ -12,15 +12,16 @@ USAGE
   ccfinder archive <file.claudesession>          archive the session (reversible)
   ccfinder unarchive <file.claudesession>        bring an archived session back
   ccfinder delete <file.claudesession> --yes     delete the session record
+  ccfinder config [layout|archive] [value]       show or change settings
   ccfinder doctor                                report what it can and cannot see
 
 Sessions are mirrored into a "Claude Sessions" folder inside the directory each
-session ran in. Sessions whose working directory no longer exists fall back to
+session ran in; the ones you archived in Claude go in its Archive subfolder. Sessions whose working directory no longer exists fall back to
 ~/Claude Sessions/_Unavailable (override the root with CCF_MIRROR).
 
 OPTIONS
-  --archived          include sessions you archived in Claude
-  --central           put everything under ~/Claude Sessions instead
+  --no-archived       leave archived sessions out of the mirror entirely
+  --central           put everything under ~/Claude Sessions for this run
   --no-git-exclude    do not touch .git/info/exclude in git repositories
   --no-prune          never delete a mirrored file
   -v                  log every change
@@ -33,14 +34,18 @@ guard let command = args.first else {
 }
 args.removeFirst()
 
-let includeArchived = args.contains("--archived")
+let skipArchived = args.contains("--no-archived")
 let prune = !args.contains("--no-prune")
 let verbose = args.contains("-v") || args.contains("--verbose")
 let positional = args.filter { !$0.hasPrefix("-") }
 
-let mirror = Mirror(includeArchived: includeArchived, prune: prune, verbose: verbose,
-                    central: args.contains("--central"),
-                    gitExclude: !args.contains("--no-git-exclude"))
+let mirror = Mirror.fromConfig(
+    forceCentral: args.contains("--central"),
+    forceSkipArchived: skipArchived,
+    prune: prune,
+    gitExclude: !args.contains("--no-git-exclude"),
+    verbose: verbose
+)
 
 switch command {
 
@@ -126,6 +131,49 @@ case "delete":
     } catch {
         FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
         exit(1)
+    }
+
+case "config":
+    var config = Config.load()
+    if positional.isEmpty {
+        print(config.summary)
+        break
+    }
+    guard positional.count >= 2 else {
+        FileHandle.standardError.write(Data("""
+        usage:
+          ccfinder config                        show current settings
+          ccfinder config layout workdir|central where session files are kept
+          ccfinder config archive show|hide      whether archived sessions appear
+
+        """.utf8))
+        exit(2)
+    }
+    switch (positional[0], positional[1]) {
+    case ("layout", let value):
+        guard let layout = Config.Layout(rawValue: value) else {
+            FileHandle.standardError.write(Data("layout must be workdir or central\n".utf8))
+            exit(2)
+        }
+        config.layout = layout
+    case ("archive", let value) where ["show", "hide", "on", "off"].contains(value):
+        config.showArchive = (value == "show" || value == "on")
+    default:
+        FileHandle.standardError.write(Data("unknown setting: \(positional[0])\n".utf8))
+        exit(2)
+    }
+
+    do { try config.save() } catch {
+        FileHandle.standardError.write(Data("could not save settings: \(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
+    print(config.summary)
+
+    // Apply it straight away rather than waiting for the agent to notice.
+    print("")
+    let updated = Mirror.fromConfig(verbose: verbose)
+    if let s = try? updated.reconcile() {
+        print("moved \(s.renamed), created \(s.created), removed \(s.removed)")
     }
 
 case "doctor":

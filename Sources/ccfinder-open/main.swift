@@ -200,11 +200,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+// Running the background sync as the app's own executable, rather than as a bare
+// binary in Resources, is what makes it work at all under launchd: macOS grants
+// file access per code identity, and a loose executable has none. Launched this
+// way the process carries the app bundle's identity, so access to places like the
+// Desktop follows the app — and can be granted in System Settings if it is not.
+if CommandLine.arguments.contains("--watch") {
+    Watcher(mirror: Mirror.fromConfig()).run()
+} else {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    app.run()
+}
 
 
 enum AppLog {

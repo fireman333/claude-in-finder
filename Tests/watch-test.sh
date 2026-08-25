@@ -57,5 +57,19 @@ fi
 [ ! -f "$WORKDIR/Claude Sessions/Watched session.claudesession" ] \
   || { echo "FAIL: old filename left behind"; exit 1; }
 
+echo "3. dragging a file into Archive/ is picked up while running"
+mkdir -p "$WORKDIR/Claude Sessions/Archive"
+mv "$WORKDIR/Claude Sessions/Retitled live.claudesession" "$WORKDIR/Claude Sessions/Archive/"
+waited=0
+until python3 -c "
+import json,sys
+sys.exit(0 if json.load(open('$CCF_SESSIONS/local_bbbb.json')).get('isArchived') is True else 1)" 2>/dev/null; do
+  sleep 0.5; waited=$((waited + 1))
+  if [ "$waited" -gt 20 ]; then
+    echo "FAIL: watcher did not notice the drag"; cat "$TMP/watch.log"; exit 1
+  fi
+done
+echo "   the session was archived without a restart"
+
 echo
-echo "PASS — watcher reacts to both creation and retitling"
+echo "PASS — watcher reacts to creation, retitling and drag-to-archive"

@@ -69,7 +69,7 @@ mkdir -p "$GONE"; write_session "Homeless session" "$GONE"; rm -rf "$GONE"
 [ -f "$CCF_MIRROR/_Unavailable/deleted-project/Homeless session.claudesession" ] \
   || fail "session with a missing cwd was dropped"
 
-echo "8. archiving removes it from the mirror"
+echo "8. archiving moves the file into Archive/ instead of deleting it"
 write_session "Back home"
 "$CCFINDER" sync >/dev/null
 BACK="$WORKDIR/Claude Sessions/Back home.claudesession"
@@ -79,8 +79,18 @@ import json,sys
 p=sys.argv[1]; d=json.load(open(p)); d["isArchived"]=True
 json.dump(d,open(p,"w"))
 PY
+INODE_LIVE="$(stat -f %i "$BACK")"
 "$CCFINDER" sync >/dev/null
-[ ! -f "$BACK" ] || fail "archived session still mirrored"
+ARCHIVED="$WORKDIR/Claude Sessions/Archive/Back home.claudesession"
+[ -f "$ARCHIVED" ] || fail "archived session not found in Archive/"
+[ ! -f "$BACK" ] || fail "archived session left in the live folder"
+[ "$INODE_LIVE" = "$(stat -f %i "$ARCHIVED")" ] || fail "archiving recreated the file instead of moving it"
+[ ! -f "$WORKDIR/Claude Sessions/Archive/+ New Session.claudesession" ] || fail "+ New Session leaked into Archive/"
+[ ! -f "$WORKDIR/Claude Sessions/Archive/.ccf-project" ] || fail ".ccf-project leaked into Archive/"
+
+echo "8b. --no-archived leaves them out entirely"
+"$CCFINDER" sync --no-archived >/dev/null
+[ ! -f "$ARCHIVED" ] || fail "--no-archived still mirrored an archived session"
 
 echo "9. a lost index is rebuilt from the files themselves"
 python3 - "$CCF_SESSIONS/local_aaaa.json" <<'PY'
@@ -100,6 +110,7 @@ echo "10. every 'new session' entry point resolves to the working directory"
 write_session "Anchor"
 "$CCFINDER" sync >/dev/null
 EXPECT="claude://code/new?folder=$WORKDIR"
+mkdir -p "$WORKDIR/Claude Sessions/Archive"
 for target in \
   "$WORKDIR" \
   "$WORKDIR/Claude Sessions" \
