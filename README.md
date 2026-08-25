@@ -66,6 +66,15 @@ Everything lands under your home directory — `~/Applications`, `~/.local/bin`,
 ./Scripts/uninstall.sh   # removes all of it; leaves ~/Claude Sessions alone
 ```
 
+If the session files show up with the plain white document icon instead of the
+app's own, that is macOS's icon cache rather than a broken install — it holds on
+to the first icon it resolved for the file type. Clearing it and restarting
+Finder brings the real one back:
+
+```bash
+qlmanage -r cache && killall Finder Dock
+```
+
 ## Settings
 
 Three ways in, whichever is nearest:
