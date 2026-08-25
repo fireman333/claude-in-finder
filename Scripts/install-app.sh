@@ -65,8 +65,27 @@ cat > "$AGENT" <<PLIST
 </plist>
 PLIST
 
+# bootout is asynchronous: bootstrapping while the old job is still being torn
+# down fails with "Input/output error". Wait for it to actually go away first.
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$UID" "$AGENT"
+for _ in $(seq 1 40); do
+  launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1 || break
+  sleep 0.25
+done
+
+if ! launchctl bootstrap "gui/$UID" "$AGENT" 2>/dev/null; then
+  sleep 1
+  if ! launchctl bootstrap "gui/$UID" "$AGENT"; then
+    echo "error: could not start the sync agent." >&2
+    echo "       try:  launchctl bootstrap gui/$UID \"$AGENT\"" >&2
+    exit 1
+  fi
+fi
+
+if ! launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
+  echo "error: the sync agent did not come up; run 'ccfinder doctor' for details." >&2
+  exit 1
+fi
 
 echo "==> first sync"
 "$DEST_APP/Contents/Resources/ccfinder" sync

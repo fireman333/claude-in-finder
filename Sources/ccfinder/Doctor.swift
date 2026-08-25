@@ -50,7 +50,41 @@ enum Doctor {
             check(".claudesession handler", false, "no session file to probe — run 'ccfinder sync' first")
         }
 
+        // Ask launchd whether the job is actually up. Checking only that the plist
+        // exists reports success even when the agent failed to start.
         let agent = Paths.home.appendingPathComponent("Library/LaunchAgents/com.klaude.ccfinder.plist")
-        check("Sync agent installed", fm.fileExists(atPath: agent.path), agent.path)
+        let installed = fm.fileExists(atPath: agent.path)
+        check("Sync agent installed", installed, agent.path)
+
+        let status = launchdStatus(label: "com.klaude.ccfinder")
+        check("Sync agent running", status.running,
+              status.detail.isEmpty
+                  ? "not loaded — run: launchctl bootstrap gui/$(id -u) \(agent.path)"
+                  : status.detail)
+    }
+
+    /// Shells out to launchctl: there is no public API for querying another job.
+    private static func launchdStatus(label: String) -> (running: Bool, detail: String) {
+        let uid = getuid()
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        task.arguments = ["print", "gui/\(uid)/\(label)"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+
+        do { try task.run() } catch { return (false, "could not run launchctl") }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else {
+            return (false, "")
+        }
+
+        let running = text.contains("state = running")
+        var detail = running ? "" : "loaded but not running"
+        if let line = text.split(separator: "\n").first(where: { $0.contains("pid = ") }) {
+            detail = "pid\(line.split(separator: "=").last ?? "")"
+        }
+        return (running, detail.trimmingCharacters(in: .whitespaces))
     }
 }
