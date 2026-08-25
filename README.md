@@ -2,15 +2,16 @@
 
 Every Claude Code conversation, as a file you can double-click in Finder.
 
+Sessions live next to the work they belong to:
+
 ```
-~/Claude Sessions/
-├── Claude-in-finder/
-│   ├── + New Session.claudesession
-│   ├── macOS Claude 對話檔案應用.claudesession
-│   └── .ccf-project
-└── HFpEF-AF/
+~/code/my-project/
+├── src/
+├── package.json
+└── Claude Sessions/
     ├── + New Session.claudesession
-    └── Cox model 的 PH assumption.claudesession
+    ├── Fix the auth redirect loop.claudesession
+    └── Rewrite the CSV importer.claudesession
 ```
 
 - **Double-click a session** → it reopens in Claude Code desktop.
@@ -18,6 +19,11 @@ Every Claude Code conversation, as a file you can double-click in Finder.
 - **Rename a session in Claude** → the file renames itself, keeping its Finder tags.
 - **`+ New Session`** → starts a fresh session in that project, skipping the New screen.
 - **Right-click any folder** → Services → *New Claude Session Here*.
+- **Right-click a session** → Services → *Archive* or *Delete*.
+
+In a git repository the folder is added to `.git/info/exclude`, so it never shows
+up in `git status` and never lands in a commit. Sessions whose working directory
+no longer exists fall back to `~/Claude Sessions/_Unavailable/`.
 
 Requires macOS 13+, Claude Desktop, and the Command Line Tools. **No Xcode needed.**
 
@@ -52,13 +58,41 @@ Everything lands under your home directory — `~/Applications`, `~/.local/bin`,
 ## Usage
 
 ```bash
-ccfinder sync         # reconcile the mirror once
-ccfinder watch        # stay running and sync on change (this is what the agent does)
-ccfinder new .        # start a session in a folder
-ccfinder doctor       # report what it can and cannot see
+ccfinder sync                 # reconcile once
+ccfinder watch                # stay running and sync on change (what the agent does)
+ccfinder new .                # start a session in a folder
+ccfinder archive <file>       # archive a session (reversible)
+ccfinder unarchive <file>     # bring it back
+ccfinder delete <file> --yes  # delete the session record
+ccfinder doctor               # report what it can and cannot see
 ```
 
-Set `CCF_MIRROR` to put the mirror somewhere other than `~/Claude Sessions`.
+Useful flags for `sync` and `watch`:
+
+| Flag | Effect |
+|---|---|
+| `--archived` | also mirror sessions you archived in Claude |
+| `--central` | keep everything under `~/Claude Sessions` instead of in working folders |
+| `--no-git-exclude` | leave `.git/info/exclude` alone |
+| `--no-prune` | never delete a mirrored file |
+
+`CCF_MIRROR` moves the fallback root away from `~/Claude Sessions`.
+
+## Archiving and deleting
+
+Both act on Claude's own session records, following the conventions read out of
+the app: archiving flips `isArchived`, deleting writes the `deleted_<uuid>`
+tombstone Claude itself uses and removes the record.
+
+Deleting is narrower than it sounds, on purpose:
+
+- the transcript under `~/.claude/projects` is **not** touched — the conversation
+  is still on disk
+- the removed record is copied to `~/Library/Application Support/ClaudeInFinder/deleted/`
+- the mirrored file goes to the Trash, not to `/dev/null`
+
+Claude Desktop caches sessions in memory, so a session archived or deleted from
+Finder while Claude is running may linger in its sidebar until you restart it.
 
 ## How it works
 
@@ -94,6 +128,14 @@ Support/ClaudeInFinder/index.json`, so a retitled session becomes a
 it your Finder tags, comments and aliases. `Tests/rename-test.sh` asserts exactly
 that.
 
+**Asking for a new session always walks up to the working directory.** The mirror
+folder sits *inside* the project, so a new session started from within
+`Claude Sessions/` has to resolve back to the parent — otherwise you would get a
+session rooted at `<project>/Claude Sessions` and a nested mirror folder inside
+it. A `.ccf-project` marker records the real directory, and every entry point —
+double-clicking `+ New Session`, the Finder service, `ccfinder new` — goes
+through the same resolver.
+
 ## Limitations
 
 - Sessions that never produced a CLI transcript have no `cliSessionId` and cannot
@@ -110,9 +152,11 @@ that.
 ```bash
 ./Tests/run-all.sh       # everything
 
-./Tests/rename-test.sh   # rename preserves the inode and extended attributes;
-                         # archiving prunes; a lost index rebuilds itself
-./Tests/watch-test.sh    # FSEvents picks up creation and retitling live
+./Tests/rename-test.sh         # where files land, renames as moves, git hygiene,
+                              # missing folders, archiving, index recovery,
+                              # new-session resolution from every entry point
+./Tests/watch-test.sh         # FSEvents picks up creation and retitling live
+./Tests/archive-delete-test.sh # archive/delete against Claude's record format
 ```
 
 Both run against a synthetic session directory via `CCF_SESSIONS`, so they never

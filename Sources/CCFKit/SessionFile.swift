@@ -54,6 +54,47 @@ public enum SessionFile {
         return c.url
     }
 
+    /// Resolves whatever the user pointed at into the directory a new session
+    /// should actually run in.
+    ///
+    /// The mirror folder sits *inside* the working directory, so asking for a new
+    /// session from within it must walk back up — otherwise you would get a session
+    /// rooted at "<project>/Claude Sessions" and, in turn, a nested mirror folder.
+    public static func workingDirectory(for path: String) -> String {
+        let fm = FileManager.default
+        var dir = (path as NSString).expandingTildeInPath
+
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: dir, isDirectory: &isDir), !isDir.boolValue {
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+
+        // The marker records the real working directory, including for folders
+        // under the central mirror whose name no longer resembles the path.
+        let marker = (dir as NSString).appendingPathComponent(".ccf-project")
+        if let raw = try? String(contentsOfFile: marker, encoding: .utf8) {
+            let real = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            var realIsDir: ObjCBool = false
+            if !real.isEmpty, fm.fileExists(atPath: real, isDirectory: &realIsDir), realIsDir.boolValue {
+                return real
+            }
+        }
+
+        // No marker yet (a folder we have not synced into): fall back to the name.
+        if (dir as NSString).lastPathComponent == mirrorFolderName {
+            let parent = (dir as NSString).deletingLastPathComponent
+            var parentIsDir: ObjCBool = false
+            if fm.fileExists(atPath: parent, isDirectory: &parentIsDir), parentIsDir.boolValue {
+                return parent
+            }
+        }
+
+        return dir
+    }
+
+    /// Kept in sync with Mirror.folderName.
+    public static let mirrorFolderName = "Claude Sessions"
+
     @discardableResult
     public static func launch(_ url: URL) async -> Bool {
         await withCheckedContinuation { continuation in

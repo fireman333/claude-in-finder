@@ -95,6 +95,30 @@ cat > "$APP/Contents/Info.plist" <<PLIST
         <string>public.file-url</string>
       </array>
     </dict>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict><key>default</key><string>Archive Claude Session</string></dict>
+      <key>NSMessage</key><string>archiveSession</string>
+      <key>NSPortName</key><string>$APP_NAME</string>
+      <key>NSSendFileTypes</key><array><string>$UTI</string></array>
+      <key>NSSendTypes</key>
+      <array>
+        <string>NSFilenamesPboardType</string>
+        <string>public.file-url</string>
+      </array>
+    </dict>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict><key>default</key><string>Delete Claude Session</string></dict>
+      <key>NSMessage</key><string>deleteSession</string>
+      <key>NSPortName</key><string>$APP_NAME</string>
+      <key>NSSendFileTypes</key><array><string>$UTI</string></array>
+      <key>NSSendTypes</key>
+      <array>
+        <string>NSFilenamesPboardType</string>
+        <string>public.file-url</string>
+      </array>
+    </dict>
   </array>
 </dict>
 </plist>

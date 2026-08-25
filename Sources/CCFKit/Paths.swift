@@ -23,8 +23,13 @@ public enum Paths {
         return home.appendingPathComponent("Claude Sessions")
     }
 
-    public static let support = home
-        .appendingPathComponent("Library/Application Support/ClaudeInFinder")
+    /// Override with CCF_SUPPORT so a test run never touches the real install's state.
+    public static var support: URL {
+        if let s = ProcessInfo.processInfo.environment["CCF_SUPPORT"], !s.isEmpty {
+            return URL(fileURLWithPath: (s as NSString).expandingTildeInPath)
+        }
+        return home.appendingPathComponent("Library/Application Support/ClaudeInFinder")
+    }
 
     /// Override with CCF_INDEX so a test run never touches the real install's state.
     public static var indexFile: URL {
