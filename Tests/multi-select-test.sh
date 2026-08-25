@@ -67,6 +67,10 @@ for n in 1 2 3; do
   [ -f "$LIVE/Session $n.claudesession" ] || fail "Session $n did not come back"
 done
 
+echo "5b. the emptied Archive folder is cleaned up"
+"$CCFINDER" sync >/dev/null
+[ ! -d "$LIVE/Archive" ] || fail "an empty Archive folder was left behind"
+
 echo "6. deleting two at once"
 "$CCFINDER" delete "$LIVE/Session 4.claudesession" "$LIVE/Session 5.claudesession" --yes > "$TMP/del" 2>&1
 [ "$(grep -c '^deleted:' "$TMP/del")" = "2" ] || { cat "$TMP/del"; fail "expected two deleted lines"; }

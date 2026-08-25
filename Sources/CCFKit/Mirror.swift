@@ -152,6 +152,7 @@ public struct Mirror {
         }
 
         try writeFolderExtras(roots: roots, sessions: sessions, fallbackNames: fallbackNames)
+        sweepEmptyArchives(roots: roots)
         try saveIndex(index)
         return stats
     }
@@ -242,6 +243,24 @@ public struct Mirror {
             if gitExclude, dir.deletingLastPathComponent().path == cwd {
                 addGitExclude(repo: URL(fileURLWithPath: cwd))
             }
+        }
+    }
+
+    /// Removes Archive folders that no longer hold anything.
+    ///
+    /// pruneEmptyParent only fires for moves this pass performed, and unarchiving
+    /// from the menu or by dragging moves the file before the sync ever sees it —
+    /// leaving an empty Archive folder sitting there looking meaningful.
+    private func sweepEmptyArchives(roots: Set<URL>) {
+        let mains = Set(roots.map {
+            $0.lastPathComponent == Self.archiveFolderName ? $0.deletingLastPathComponent() : $0
+        })
+        for main in mains {
+            let archive = main.appendingPathComponent(Self.archiveFolderName)
+            guard fm.fileExists(atPath: archive.path) else { continue }
+            let remaining = (try? fm.contentsOfDirectory(atPath: archive.path))?
+                .filter { $0 != ".DS_Store" }
+            if remaining?.isEmpty == true { try? fm.removeItem(at: archive) }
         }
     }
 
