@@ -97,6 +97,34 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     </dict>
     <dict>
       <key>NSMenuItem</key>
+      <dict><key>default</key><string>Open Claude Archive Folder</string></dict>
+      <key>NSMessage</key><string>openArchiveFolder</string>
+      <key>NSPortName</key><string>$APP_NAME</string>
+      <key>NSSendFileTypes</key><array><string>public.folder</string></array>
+      <key>NSSendTypes</key>
+      <array>
+        <string>NSFilenamesPboardType</string>
+        <string>public.file-url</string>
+      </array>
+    </dict>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict><key>default</key><string>Claude in Finder Settings…</string></dict>
+      <key>NSMessage</key><string>openSettingsService</string>
+      <key>NSPortName</key><string>$APP_NAME</string>
+      <key>NSSendFileTypes</key>
+      <array>
+        <string>public.folder</string>
+        <string>$UTI</string>
+      </array>
+      <key>NSSendTypes</key>
+      <array>
+        <string>NSFilenamesPboardType</string>
+        <string>public.file-url</string>
+      </array>
+    </dict>
+    <dict>
+      <key>NSMenuItem</key>
       <dict><key>default</key><string>Archive Claude Session</string></dict>
       <key>NSMessage</key><string>archiveSession</string>
       <key>NSPortName</key><string>$APP_NAME</string>

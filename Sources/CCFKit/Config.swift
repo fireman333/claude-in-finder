@@ -14,13 +14,36 @@ public struct Config: Codable, Equatable {
         case central
     }
 
-    public var layout: Layout = .workdir
-    /// Whether sessions archived in Claude appear in the Archive subfolder at all.
-    public var showArchive: Bool = true
+    /// What deleting a session file in Finder should mean.
+    public enum DeleteAction: String, Codable, CaseIterable {
+        /// Archive the session — the conversation is kept. The safe default.
+        case archive
+        /// Delete the session from Claude, as the Delete service does.
+        case delete
+    }
 
-    public init(layout: Layout = .workdir, showArchive: Bool = true) {
+    public var layout: Layout = .workdir
+    /// Whether the Archive folder is visible in Finder. Archived sessions are
+    /// mirrored either way; hiding sets the folder's hidden flag, so the contents
+    /// stay reachable through "Open Archive Folder".
+    public var showArchive: Bool = true
+    public var onFinderDelete: DeleteAction = .archive
+
+    public init(layout: Layout = .workdir,
+                showArchive: Bool = true,
+                onFinderDelete: DeleteAction = .archive) {
         self.layout = layout
         self.showArchive = showArchive
+        self.onFinderDelete = onFinderDelete
+    }
+
+    // Older config files predate onFinderDelete; default it rather than failing
+    // to decode and silently resetting every other setting.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        layout = try c.decodeIfPresent(Layout.self, forKey: .layout) ?? .workdir
+        showArchive = try c.decodeIfPresent(Bool.self, forKey: .showArchive) ?? true
+        onFinderDelete = try c.decodeIfPresent(DeleteAction.self, forKey: .onFinderDelete) ?? .archive
     }
 
     public static var url: URL { Paths.support.appendingPathComponent("config.json") }
@@ -45,8 +68,11 @@ public struct Config: Codable, Equatable {
                         ? "(a Claude Sessions folder inside each working directory)"
                         : "(everything under \(Paths.mirror.path))")
         archive      \(showArchive ? "show" : "hide")   \(showArchive
-                        ? "(archived sessions appear in the Archive subfolder)"
-                        : "(archived sessions are not mirrored)")
+                        ? "(the Archive folder is visible)"
+                        : "(the Archive folder is hidden; open it from the right-click menu)")
+        on-delete    \(onFinderDelete.rawValue)   \(onFinderDelete == .archive
+                        ? "(deleting a session file in Finder archives the session)"
+                        : "(deleting a session file in Finder deletes the session)")
 
         config file  \(Self.url.path)
         """

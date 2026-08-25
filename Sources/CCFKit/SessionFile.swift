@@ -10,7 +10,7 @@ public enum SessionFile {
 
     /// Pulls `<meta name="..." content="...">` out of the file's head.
     public static func meta(in url: URL) -> [String: String] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+        guard let text = TimeLimited.text(at: url) else { return [:] }
         let head = String(text.prefix(4096))
         var out: [String: String] = [:]
 
@@ -75,7 +75,7 @@ public enum SessionFile {
         var probe = dir
         for _ in 0..<3 {
             let marker = (probe as NSString).appendingPathComponent(".ccf-project")
-            if let raw = try? String(contentsOfFile: marker, encoding: .utf8) {
+            if let raw = TimeLimited.text(at: URL(fileURLWithPath: marker)) {
                 let real = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 var realIsDir: ObjCBool = false
                 if !real.isEmpty, fm.fileExists(atPath: real, isDirectory: &realIsDir), realIsDir.boolValue {

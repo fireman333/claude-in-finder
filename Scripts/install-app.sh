@@ -62,6 +62,8 @@ for title, message in [
     ("New Claude Session Here", "newSessionHere"),
     ("Archive Claude Session", "archiveSession"),
     ("Delete Claude Session", "deleteSession"),
+    ("Open Claude Archive Folder", "openArchiveFolder"),
+    ("Claude in Finder Settings\u2026", "openSettingsService"),
 ]:
     statuses[f"com.klaude.claude-in-finder - {title} - {message}"] = {
         "enabled_context_menu": True,
@@ -90,7 +92,10 @@ cat > "$AGENT" <<PLIST
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>ProcessType</key><string>Background</string>
+  <!-- Interactive, not Background: the agent owns the menu bar item, and a
+       Background job is throttled and not treated as part of the GUI session. -->
+  <key>ProcessType</key><string>Interactive</string>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
   <key>StandardErrorPath</key><string>$HOME/Library/Application Support/ClaudeInFinder/ccfinder.log</string>
   <key>StandardOutPath</key><string>$HOME/Library/Application Support/ClaudeInFinder/ccfinder.log</string>
 </dict>

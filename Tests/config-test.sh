@@ -11,6 +11,8 @@ export CCF_SESSIONS="$TMP/sessions/acct/org"
 export CCF_MIRROR="$TMP/central"
 export CCF_INDEX="$TMP/index.json"
 export CCF_SUPPORT="$TMP/support"
+export CCF_TRASH="$TMP/trash"
+mkdir -p "$CCF_TRASH"
 mkdir -p "$CCF_SESSIONS"
 WORKDIR="$TMP/proj"; mkdir -p "$WORKDIR"
 
@@ -32,14 +34,19 @@ echo "1. defaults: working folder, archive shown"
 [ -f "$WORKDIR/Claude Sessions/Live one.claudesession" ] || fail "live session not in the working folder"
 [ -f "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" ] || fail "archived session not in Archive/"
 
-echo "2. archive hide removes the Archive folder"
+echo "2. archive hide keeps the files but hides the folder"
 "$CCFINDER" config archive hide >/dev/null
-[ ! -f "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" ] || fail "archived session still mirrored"
+[ -f "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" ] \
+  || fail "hiding removed the archived session instead of hiding the folder"
+ls -ldO "$WORKDIR/Claude Sessions/Archive" | grep -q hidden \
+  || fail "the Archive folder is not marked hidden"
 [ -f "$WORKDIR/Claude Sessions/Live one.claudesession" ] || fail "live session disappeared too"
 
-echo "3. archive show brings it back"
+echo "3. archive show reveals it again"
 "$CCFINDER" config archive show >/dev/null
-[ -f "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" ] || fail "archived session did not come back"
+[ -f "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" ] || fail "archived session vanished"
+ls -ldO "$WORKDIR/Claude Sessions/Archive" | grep -q hidden \
+  && fail "the Archive folder is still hidden" || true
 
 echo "4. layout central moves everything under the central folder"
 "$CCFINDER" config layout central >/dev/null
@@ -61,5 +68,37 @@ echo "7. a flag overrides the saved setting for one run only"
 [ -f "$CCF_MIRROR/proj/Live one.claudesession" ] || fail "--central was ignored"
 grep -q '"layout" : "workdir"' "$CCF_SUPPORT/config.json" || fail "--central changed the saved setting"
 
+echo "8. deleting a file in Finder archives the session by default"
+"$CCFINDER" config on-delete archive >/dev/null
+LIVE="$WORKDIR/Claude Sessions/Live one.claudesession"
+[ -f "$LIVE" ] || fail "setup: live session missing"
+mv "$LIVE" "$CCF_TRASH/"          # what Finder does on delete
+"$CCFINDER" sync >/dev/null
+python3 -c "
+import json,sys
+d=json.load(open('$CCF_SESSIONS/local_11111111-1111-1111-1111-111111111111.json'))
+sys.exit(0 if d.get('isArchived') is True else 1)" || fail "deleting the file did not archive the session"
+[ -f "$WORKDIR/Claude Sessions/Archive/Live one.claudesession" ] \
+  || fail "the session should reappear under Archive/"
+
+echo "9. with on-delete=delete the record is removed instead"
+"$CCFINDER" config on-delete delete >/dev/null
+mv "$WORKDIR/Claude Sessions/Archive/Live one.claudesession" "$CCF_TRASH/"
+"$CCFINDER" sync >/dev/null
+[ ! -f "$CCF_SESSIONS/local_11111111-1111-1111-1111-111111111111.json" ] \
+  || fail "the session record survived a delete-configured removal"
+[ -f "$CCF_SESSIONS/deleted_11111111-1111-1111-1111-111111111111" ] || fail "no tombstone written"
+[ -f "$CCF_SUPPORT/deleted/local_11111111-1111-1111-1111-111111111111.json" ] || fail "no backup kept"
+
+echo "10. moving a file out of the mirror is not read as a deletion"
+#     only the Trash counts; anything else may just have been dragged away
+"$CCFINDER" config on-delete delete >/dev/null
+OTHER="$TMP/moved-away"; mkdir -p "$OTHER"
+mv "$WORKDIR/Claude Sessions/Archive/Old one.claudesession" "$OTHER/" 2>/dev/null || true
+"$CCFINDER" sync >/dev/null
+[ -f "$CCF_SESSIONS/local_22222222-2222-2222-2222-222222222222.json" ] \
+  || fail "a file moved elsewhere was treated as a deletion"
+
 echo
-echo "PASS — both settings take effect immediately and survive a restart"
+echo "PASS — settings take effect immediately, hiding keeps the files,"
+echo "       and deleting in Finder does what the setting says"

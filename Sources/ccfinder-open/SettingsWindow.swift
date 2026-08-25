@@ -10,10 +10,13 @@ final class SettingsWindowController: NSWindowController {
 
     private var layoutPopUp: NSPopUpButton!
     private var archiveCheck: NSButton!
+    private var deletePopUp: NSPopUpButton!
     private var statusLabel: NSTextField!
     private var busy: NSProgressIndicator!
 
-    convenience init() {
+    private var quitsOnClose = true
+
+    convenience init(quitsOnClose: Bool = true) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 300),
             styleMask: [.titled, .closable],
@@ -23,6 +26,7 @@ final class SettingsWindowController: NSWindowController {
         window.title = "Claude in Finder"
         window.center()
         self.init(window: window)
+        self.quitsOnClose = quitsOnClose
         buildContent()
         reloadStatus()
     }
@@ -57,6 +61,18 @@ final class SettingsWindowController: NSWindowController {
         archiveHelp.lineBreakMode = .byWordWrapping
         archiveHelp.usesSingleLineMode = false
 
+        let deleteTitle = label("Deleting a session file in Finder", size: 13, weight: .medium)
+        deletePopUp = NSPopUpButton()
+        deletePopUp.addItems(withTitles: ["Archives the session", "Deletes the session"])
+        deletePopUp.target = self
+        deletePopUp.action = #selector(deleteActionChanged)
+        let deleteHelp = label(
+            "Archiving keeps the conversation; deleting removes it from Claude's list "
+                + "and backs the record up, leaving the transcript itself alone.",
+            size: 11, weight: .regular, secondary: true)
+        deleteHelp.lineBreakMode = .byWordWrapping
+        deleteHelp.usesSingleLineMode = false
+
         statusLabel = label("", size: 11, weight: .regular, secondary: true)
 
         busy = NSProgressIndicator()
@@ -77,6 +93,7 @@ final class SettingsWindowController: NSWindowController {
             title,
             layoutTitle, layoutPopUp, layoutHelp,
             archiveCheck, archiveHelp,
+            deleteTitle, deletePopUp, deleteHelp,
             statusLabel,
             buttons,
         ])
@@ -85,7 +102,8 @@ final class SettingsWindowController: NSWindowController {
         stack.spacing = 8
         stack.setCustomSpacing(16, after: title)
         stack.setCustomSpacing(16, after: layoutHelp)
-        stack.setCustomSpacing(18, after: archiveHelp)
+        stack.setCustomSpacing(16, after: archiveHelp)
+        stack.setCustomSpacing(18, after: deleteHelp)
         stack.setCustomSpacing(14, after: statusLabel)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
@@ -96,14 +114,17 @@ final class SettingsWindowController: NSWindowController {
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -18),
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
             layoutHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
             archiveHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            deleteHelp.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
 
         let config = Config.load()
         layoutPopUp.selectItem(at: config.layout == .workdir ? 0 : 1)
         archiveCheck.state = config.showArchive ? .on : .off
+        deletePopUp.selectItem(at: config.onFinderDelete == .archive ? 0 : 1)
     }
 
     private func label(_ text: String, size: CGFloat,
@@ -125,6 +146,12 @@ final class SettingsWindowController: NSWindowController {
     @objc private func archiveChanged() {
         var config = Config.load()
         config.showArchive = archiveCheck.state == .on
+        apply(config)
+    }
+
+    @objc private func deleteActionChanged() {
+        var config = Config.load()
+        config.onFinderDelete = deletePopUp.indexOfSelectedItem == 0 ? .archive : .delete
         apply(config)
     }
 
@@ -156,6 +183,7 @@ final class SettingsWindowController: NSWindowController {
     private func setBusy(_ on: Bool) {
         layoutPopUp.isEnabled = !on
         archiveCheck.isEnabled = !on
+        deletePopUp.isEnabled = !on
         on ? busy.startAnimation(nil) : busy.stopAnimation(nil)
     }
 
@@ -177,6 +205,12 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func dismiss(_ sender: Any?) {
         window?.close()
-        NSApp.terminate(nil)
+        if quitsOnClose {
+            NSApp.terminate(nil)
+        } else {
+            // Back to a menu-bar-only app; leaving it "regular" would strand an
+            // empty app menu with no windows behind it.
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }

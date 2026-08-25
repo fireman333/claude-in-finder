@@ -56,7 +56,9 @@ public enum Doctor {
         check("Sync agent installed", installed, agent.path)
 
         let config = Config.load()
-        print("    settings: layout=\(config.layout.rawValue), archive=\(config.showArchive ? "show" : "hide")")
+        print("    settings: layout=\(config.layout.rawValue), "
+              + "archive=\(config.showArchive ? "show" : "hide"), "
+              + "on-delete=\(config.onFinderDelete.rawValue)")
 
         // A background agent cannot answer a consent prompt, so a protected folder
         // shows up as one it simply cannot read.
@@ -91,6 +93,8 @@ public enum Doctor {
             ("New Claude Session Here", "newSessionHere"),
             ("Archive Claude Session", "archiveSession"),
             ("Delete Claude Session", "deleteSession"),
+            ("Open Claude Archive Folder", "openArchiveFolder"),
+            ("Claude in Finder Settings\u{2026}", "openSettingsService"),
         ]
         let prefs = Paths.home.appendingPathComponent("Library/Preferences/pbs.plist")
         guard let data = try? Data(contentsOf: prefs),

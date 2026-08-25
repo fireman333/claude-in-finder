@@ -69,7 +69,8 @@ enum Render {
     }
 
     static func parse(jsonl: URL) -> [Message] {
-        guard let handle = try? String(contentsOf: jsonl, encoding: .utf8) else { return [] }
+        // Transcripts can be large and, on iCloud, not actually present yet.
+        guard let handle = TimeLimited.text(at: jsonl, seconds: 5) else { return [] }
         var out: [Message] = []
 
         for line in handle.split(separator: "\n", omittingEmptySubsequences: true) {

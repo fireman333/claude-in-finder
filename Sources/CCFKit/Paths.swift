@@ -32,6 +32,14 @@ public enum Paths {
     }
 
     /// Override with CCF_INDEX so a test run never touches the real install's state.
+    /// Override with CCF_TRASH for tests.
+    public static var trash: URL {
+        if let s = ProcessInfo.processInfo.environment["CCF_TRASH"], !s.isEmpty {
+            return URL(fileURLWithPath: (s as NSString).expandingTildeInPath)
+        }
+        return home.appendingPathComponent(".Trash")
+    }
+
     public static var indexFile: URL {
         if let s = ProcessInfo.processInfo.environment["CCF_INDEX"], !s.isEmpty {
             return URL(fileURLWithPath: (s as NSString).expandingTildeInPath)

@@ -21,7 +21,10 @@ public final class Watcher {
         self.debounce = debounce
     }
 
-    public func run(fullResyncEvery: TimeInterval = 300) {
+    /// Starts watching and returns. FSEvents and the periodic timer both run on a
+    /// dispatch queue, so nothing here needs a run loop of its own — an earlier
+    /// version parked a thread on one and spun a core doing nothing.
+    public func start(fullResyncEvery: TimeInterval = 300) {
         sync(reason: "startup")
         restartStream()
 
@@ -30,9 +33,20 @@ public final class Watcher {
         timer.setEventHandler { [weak self] in self?.sync(reason: "periodic") }
         timer.resume()
         self.timer = timer
+    }
 
+    /// Starts watching and blocks, for the command-line `watch` subcommand.
+    public func run(fullResyncEvery: TimeInterval = 300) {
+        start(fullResyncEvery: fullResyncEvery)
         RunLoop.main.run()
     }
+
+    /// Runs a pass right now, off the caller's thread.
+    public func syncNow() {
+        queue.async { [weak self] in self?.sync(reason: "manual") }
+    }
+
+
 
     /// Watches Claude's session directory *and* every mirror folder, so that
     /// dragging a file into or out of Archive is picked up as quickly as a change

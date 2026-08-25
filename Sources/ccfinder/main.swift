@@ -12,7 +12,7 @@ USAGE
   ccfinder archive <file...>                     archive one or more sessions (reversible)
   ccfinder unarchive <file...>                   bring archived sessions back
   ccfinder delete <file...> --yes                delete session records
-  ccfinder config [layout|archive] [value]       show or change settings
+  ccfinder config [layout|archive|on-delete] [v] show or change settings
   ccfinder doctor                                report what it can and cannot see
 
 Sessions are mirrored into a "Claude Sessions" folder inside the directory each
@@ -156,7 +156,8 @@ case "config":
         usage:
           ccfinder config                        show current settings
           ccfinder config layout workdir|central where session files are kept
-          ccfinder config archive show|hide      whether archived sessions appear
+          ccfinder config archive show|hide      whether the Archive folder is visible
+          ccfinder config on-delete archive|delete  what deleting a file in Finder means
 
         """.utf8))
         exit(2)
@@ -170,6 +171,12 @@ case "config":
         config.layout = layout
     case ("archive", let value) where ["show", "hide", "on", "off"].contains(value):
         config.showArchive = (value == "show" || value == "on")
+    case ("on-delete", let value):
+        guard let action = Config.DeleteAction(rawValue: value) else {
+            FileHandle.standardError.write(Data("on-delete must be archive or delete\n".utf8))
+            exit(2)
+        }
+        config.onFinderDelete = action
     default:
         FileHandle.standardError.write(Data("unknown setting: \(positional[0])\n".utf8))
         exit(2)

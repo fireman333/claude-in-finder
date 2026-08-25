@@ -18,7 +18,9 @@ Sessions live next to the work they belong to:
 - **Space bar** → Quick Look shows the actual conversation.
 - **Rename a session in Claude** → the file renames itself, keeping its Finder tags.
 - **`+ New Session`** → starts a fresh session in that project, skipping the New screen.
-- **Right-click any folder** → Services → *New Claude Session Here*.
+- **Delete a session file** → the session is archived (or deleted — your choice).
+- **Right-click any folder** → Services → *New Claude Session Here*, *Open Claude
+  Archive Folder*, *Claude in Finder Settings…*.
 - **Right-click a session** → Services → *Archive* or *Delete*.
 - **Drag a session into `Archive/`** → it is archived in Claude too. Drag it back
   out to unarchive.
@@ -59,21 +61,39 @@ Everything lands under your home directory — `~/Applications`, `~/.local/bin`,
 
 ## Settings
 
-Open the app itself — from Spotlight, or the **Open Claude Sessions** button's
-window — for a settings panel: where session files are kept, and whether the
-Archive folder is shown. Or from the command line:
+Three ways in, whichever is nearest:
+
+- the **menu bar icon** → Settings…
+- right-click any folder → Services → **Claude in Finder Settings…**
+- open the app from Spotlight
+
+| Setting | Choices |
+|---|---|
+| Where session files are kept | in each working folder · all together under `~/Claude Sessions` |
+| Show the Archive folder | visible · hidden (the files stay; open it from the right-click menu) |
+| Deleting a session file in Finder | archives the session · deletes it |
+
+Or from the command line:
 
 ```bash
-ccfinder config                     # show current settings
-ccfinder config layout workdir      # a Claude Sessions folder in each working directory
-ccfinder config layout central      # everything under ~/Claude Sessions
-ccfinder config archive show        # archived sessions appear in Archive/
-ccfinder config archive hide        # archived sessions are not mirrored at all
+ccfinder config                        # show current settings
+ccfinder config layout workdir|central
+ccfinder config archive show|hide
+ccfinder config on-delete archive|delete
 ```
 
 Changing a setting rearranges the existing files immediately — by moving them, so
 Finder tags survive — and the background agent picks the change up without a
 restart. Settings live in `~/Library/Application Support/ClaudeInFinder/config.json`.
+
+Hiding the Archive folder sets its hidden flag rather than dropping the files, so
+the archived sessions are still there and **Open Claude Archive Folder** can reach
+them.
+
+Deleting a session file only counts when the file actually reaches the Trash. A
+file that merely went missing — dragged somewhere unexpected, or sitting in a
+folder macOS would not let the agent read — is put back on the next pass instead,
+because acting destructively on a guess is not worth the convenience.
 
 ## Full Disk Access
 

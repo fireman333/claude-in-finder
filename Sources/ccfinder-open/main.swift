@@ -86,6 +86,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Settings, reachable from any folder's contextual menu. The app has no Dock
+    /// icon and quits as soon as it is done, so without an entry point like this
+    /// there is nowhere to open it from.
+    @objc func openSettingsService(_ pboard: NSPasteboard,
+                                   userData: String,
+                                   error: AutoreleasingUnsafeMutablePointer<NSString>) {
+        claim()
+        showSettings()
+    }
+
+    /// Opens the Archive folder for whatever was right-clicked — the point of
+    /// hiding it rather than not creating it.
+    @objc func openArchiveFolder(_ pboard: NSPasteboard,
+                                 userData: String,
+                                 error: AutoreleasingUnsafeMutablePointer<NSString>) {
+        claim()
+        guard let folder = Self.folder(from: pboard) else {
+            error.pointee = "No usable folder in the selection." as NSString
+            NSApp.terminate(nil)
+            return
+        }
+        let archive = URL(fileURLWithPath: folder)
+            .appendingPathComponent(SessionFile.mirrorFolderName)
+            .appendingPathComponent(SessionStore.archiveFolderName)
+
+        if FileManager.default.fileExists(atPath: archive.path) {
+            NSWorkspace.shared.open(archive)
+            AppLog.write("opened archive: \(archive.path)")
+        } else {
+            error.pointee = "No archived sessions for \((folder as NSString).lastPathComponent)." as NSString
+        }
+        NSApp.terminate(nil)
+    }
+
     // MARK: - Archive / delete services
 
     @objc func archiveSession(_ pboard: NSPasteboard,
@@ -230,7 +264,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // way the process carries the app bundle's identity, so access to places like the
 // Desktop follows the app — and can be granted in System Settings if it is not.
 if CommandLine.arguments.contains("--watch") {
-    Watcher(mirror: Mirror.fromConfig()).run()
+    // Run as an accessory app rather than a bare tool: it needs a menu bar item,
+    // which is the only place settings can be opened from in an app with no Dock
+    // icon. The watcher itself runs off the main thread so the UI stays live.
+    let app = NSApplication.shared
+    let delegate = AgentDelegate()
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    app.run()
 } else {
     let app = NSApplication.shared
     let delegate = AppDelegate()
@@ -239,6 +280,47 @@ if CommandLine.arguments.contains("--watch") {
     app.run()
 }
 
+/// The long-running half: sync agent plus menu bar item.
+final class AgentDelegate: NSObject, NSApplicationDelegate {
+    private var statusItem: StatusItemController?
+    private var watcher: Watcher?
+    /// servicesProvider is held unowned, so the provider has to be kept alive here.
+    private let services = AppDelegate()
+
+    func applicationDidFinishLaunching(_ note: Notification) {
+        NSApp.servicesProvider = services
+
+        let watcher = Watcher(mirror: Mirror.fromConfig())
+        self.watcher = watcher
+        statusItem = StatusItemController { watcher.syncNow() }
+
+        // The first pass reads several hundred files; keep it off the main thread
+        // so the menu bar item appears immediately.
+        DispatchQueue.global(qos: .utility).async { watcher.start() }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Opening the app from Spotlight or the Finder reaches the already-running
+    /// agent rather than starting a second copy, so the reopen has to be answered
+    /// here — otherwise clicking the app appears to do nothing at all.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        statusItem?.showSettings()
+        return true
+    }
+
+    /// A session file double-clicked while the agent is running is delivered here.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Task {
+            for url in urls where SessionFile.deepLink(for: url) != nil {
+                if let link = SessionFile.deepLink(for: url) {
+                    let ok = await SessionFile.launch(link)
+                    AppLog.write("open \(url.lastPathComponent) → \(link.absoluteString) [\(ok ? "ok" : "failed")]")
+                }
+            }
+        }
+    }
+}
 
 enum AppLog {
     static func write(_ message: String) {
