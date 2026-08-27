@@ -51,6 +51,20 @@ public enum SessionFile {
         c.host = "code"
         c.path = "/new"
         c.queryItems = [URLQueryItem(name: "folder", value: cwd)]
+
+        // "+" is a legal character in a query, so URLComponents leaves it as it
+        // found it — but a reader that treats the query as form data turns it
+        // back into a space. A folder called "HFpEF+AF" then arrives as
+        // "HFpEF AF", which is a real-looking path that does not exist, and the
+        // session fails at the moment you send the first message with "this
+        // session's working folder no longer exists".
+        //
+        // Everything else that matters here — "&", "=", "#", spaces, non-ASCII —
+        // URLComponents already encodes, so any "+" left in the encoded query
+        // came from the path and means a literal plus.
+        if let query = c.percentEncodedQuery, query.contains("+") {
+            c.percentEncodedQuery = query.replacingOccurrences(of: "+", with: "%2B")
+        }
         return c.url
     }
 

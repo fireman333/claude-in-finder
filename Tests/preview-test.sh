@@ -90,6 +90,28 @@ NEW="$WORKDIR/Claude Sessions/+ New Session.claudesession"
   || fail "the + New Session link is wrong"; }
 "$CCFINDER" link "$WORKDIR" >/dev/null 2>&1 && fail "a folder is not a session file" || true
 
+echo "7. a folder with a + in its name survives the round trip"
+#    "+" is legal in a query and URLComponents leaves it alone, but a reader
+#    that treats the query as form data turns it back into a space — so
+#    "HFpEF+AF" arrived as "HFpEF AF", a real-looking path that does not exist,
+#    and the session died on the first message
+PLUS="$TMP/HFpEF+AF/HF background"; mkdir -p "$PLUS"
+LINK="$("$CCFINDER" new "$PLUS" --dry-run)"
+case "$LINK" in
+  *%2B*) : ;;
+  *) fail "the + was not encoded: $LINK" ;;
+esac
+python3 - "$LINK" "$PLUS" <<'PY'
+import sys, os
+from urllib.parse import urlparse, parse_qs
+got = parse_qs(urlparse(sys.argv[1]).query)["folder"][0]
+if got != sys.argv[2]:
+    sys.exit(f"form-style decode gave {got!r}, wanted {sys.argv[2]!r}")
+if not os.path.isdir(got):
+    sys.exit(f"the decoded folder does not exist: {got}")
+PY
+[ $? -eq 0 ] || fail "a + in the path did not survive the round trip"
+
 echo
 echo "PASS — files carry the conversation's own dates, the preview admits what it"
 echo "       leaves out, and every file can hand back its claude:// link"
