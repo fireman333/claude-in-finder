@@ -349,7 +349,9 @@ public struct Mirror {
 
             // What the file on disk actually holds, which is not the same as what
             // this pass rendered — see the incomplete case below.
-            var onDisk = previous?.hash
+            // Empty means unknown, the same as an adopted orphan: whatever is
+            // there was not written by this pass, so the next one rewrites it.
+            var onDisk = previous?.hash ?? ""
             if !fm.fileExists(atPath: dest.path) {
                 try write(content(), to: dest)
                 onDisk = hash
@@ -369,7 +371,7 @@ public struct Mirror {
             // dropped it every pass, so `pendingAttempts` never reached the limit
             // that is meant to call off a rename Claude keeps overwriting.
             index.entries[session.desktopID] = Entry(
-                path: dest.path, title: session.title, hash: onDisk ?? hash,
+                path: dest.path, title: session.title, hash: onDisk,
                 pendingTitle: index.entries[session.desktopID]?.pendingTitle,
                 pendingAttempts: index.entries[session.desktopID]?.pendingAttempts,
                 fingerprint: complete ? fingerprint : nil
