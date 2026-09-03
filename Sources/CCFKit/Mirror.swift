@@ -285,31 +285,39 @@ public struct Mirror {
                 // again, and deleting whatever is in the way then destroys a file
                 // that was only passing through. Park it instead: its own turn in
                 // this pass will collect it from where we left it.
-                if fm.fileExists(atPath: dest.path) {
+                var clear = !fm.fileExists(atPath: dest.path)
+                if !clear {
                     let occupant = locations.first {
                         $0.key != session.desktopID
                             && Self.normalize($0.value).path == Self.normalize(dest).path
                     }
                     if let occupant {
-                        let parked = dest.deletingLastPathComponent().appendingPathComponent(
-                            "\(Self.parkingPrefix)\(Self.bareUUID(occupant.key)).claudesession")
-                        try? fm.removeItem(at: parked)
-                        if (try? fm.moveItem(at: dest, to: parked)) != nil {
+                        if let parked = Self.freeParkingPath(for: occupant.key,
+                                                             in: dest.deletingLastPathComponent()),
+                           (try? fm.moveItem(at: dest, to: parked)) != nil {
                             locations[occupant.key] = Self.normalize(parked)
+                            clear = true
                         }
                     } else {
+                        // Not a session we know: a leftover, or a file whose head we
+                        // could not read. Nothing tracks it, so nothing loses it.
                         try? fm.removeItem(at: dest)
+                        clear = !fm.fileExists(atPath: dest.path)
                     }
                 }
-                do {
-                    try fm.moveItem(at: oldURL, to: dest)
-                    stats.renamed += 1
-                    log("moved: \(oldURL.path) → \(dest.path)")
-                    pruneEmptyParent(of: oldURL)
-                } catch {
-                    // Fall through and write a fresh file; a single stubborn path
-                    // should not take the rest of the sync down with it.
-                    log("move failed (\(error.localizedDescription)); rewriting instead")
+                // Could not clear the way: leave the file under the name it has and
+                // try again next pass. Waiting is always better than overwriting.
+                if clear {
+                    do {
+                        try fm.moveItem(at: oldURL, to: dest)
+                        stats.renamed += 1
+                        log("moved: \(oldURL.path) → \(dest.path)")
+                        pruneEmptyParent(of: oldURL)
+                    } catch {
+                        // Fall through and write a fresh file; a single stubborn path
+                        // should not take the rest of the sync down with it.
+                        log("move failed (\(error.localizedDescription)); rewriting instead")
+                    }
                 }
             }
             locations[session.desktopID] = Self.normalize(dest)
@@ -889,6 +897,21 @@ public struct Mirror {
     /// recognisable, so a pass that dies mid-swap leaves something the next pass
     /// can put back rather than something it reads as a rename.
     static let parkingPrefix = ".ccf-moving-"
+
+    /// A free name to set a file aside under while two sessions trade places.
+    /// Never overwrites: a file already parked under this id is one a pass that
+    /// died left behind, and it is still somebody's conversation. Returns nil if
+    /// no name is free, which the caller reads as "leave everything alone".
+    private static func freeParkingPath(for desktopID: String, in folder: URL) -> URL? {
+        let fm = FileManager.default
+        let stem = "\(parkingPrefix)\(bareUUID(desktopID))"
+        for n in 1...50 {
+            let name = n == 1 ? "\(stem).claudesession" : "\(stem)-\(n).claudesession"
+            let candidate = folder.appendingPathComponent(name)
+            if !fm.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
 
     /// Claude's own session ids are "local_<uuid>"; the uuid alone is what names
     /// things on our side.
