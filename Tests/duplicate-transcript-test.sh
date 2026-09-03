@@ -173,19 +173,51 @@ echo "11. a build that renders differently refreshes every preview once"
 "$CCFINDER" sync >/dev/null 2>&1
 OUT="$("$CCFINDER" sync)"
 echo "$OUT" | grep -q "updated 0" || fail "not settled before the upgrade: $OUT"
-# Prove the new build actually re-rendered by making the transcript unreadable:
-# a pass that reuses the stored preview cannot notice, one that re-renders must.
-chmod -r "$TRANSCRIPT"
-OUT="$(CCF_VERSION=99.9.9 "$CCFINDER" sync 2>/dev/null)"
-chmod +r "$TRANSCRIPT"
-FILE="$(grep -l "local_$A" "$DIR"/*.claudesession | head -1)"
-grep -q "No messages to show" "$FILE" \
-  || fail "a new build served the old build's preview instead of re-rendering: $OUT"
-
-echo "12. a transcript that was briefly unreadable is not remembered as empty"
+# Change the transcript in a way the fingerprint cannot see — same byte count,
+# same modification date. Only a pass that actually re-renders will notice.
+python3 - "$TRANSCRIPT" <<'EOF'
+import os, sys
+p = sys.argv[1]
+st = os.stat(p)                      # nanosecond precision: touch -t is not enough
+d = open(p, "rb").read()
+assert b"hi there" in d
+open(p, "wb").write(d.replace(b"hi there", b"HI THERE"))   # same length
+assert os.stat(p).st_size == st.st_size
+os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+EOF
+OUT="$("$CCFINDER" sync)"
+echo "$OUT" | grep -q "updated 0" || fail "the same build re-read an unchanged transcript: $OUT"
 OUT="$(CCF_VERSION=99.9.9 "$CCFINDER" sync)"
 FILE="$(grep -l "local_$A" "$DIR"/*.claudesession | head -1)"
-grep -q "hi there" "$FILE" || fail "the empty preview was cached and never retried: $OUT"
+grep -q "HI THERE" "$FILE" || fail "a new build served the old build's preview: $OUT"
+
+echo "12. an unreadable transcript neither wipes a good preview nor is remembered"
+chmod -r "$TRANSCRIPT"
+write_session "$A" "Renamed during outage" 1789500000000
+CCF_VERSION=99.9.9 "$CCFINDER" sync >/dev/null 2>&1
+FILE="$(grep -l "local_$A" "$DIR"/*.claudesession | head -1)"
+[ -n "$FILE" ] || fail "the file vanished during the outage"
+grep -q "HI THERE" "$FILE" || fail "an unreadable transcript wiped a good preview"
+chmod +r "$TRANSCRIPT"
+OUT="$(CCF_VERSION=99.9.9 "$CCFINDER" sync)"
+FILE="$(grep -l "local_$A" "$DIR"/*.claudesession | head -1)"
+grep -q "Renamed during outage" "$FILE" \
+  || fail "the outage was remembered and never retried: $OUT"
+
+echo "13. a file whose session this pass will not reach is waited on, never deleted"
+write_session "$A" "Alpha" 1793000000000
+write_session "$B" "Beta"  1794000000000
+"$CCFINDER" sync >/dev/null 2>&1
+grep -lq "local_$B" "$DIR"/*.claudesession || fail "setup: B has no file"
+# A now wants B's name, and B's record is gone, so this pass never reaches B.
+# --no-prune promises no mirrored file is ever deleted.
+write_session "$A" "Beta" 1795000000000
+rm -f "$CCF_SESSIONS/local_$B.json"
+"$CCFINDER" sync --no-prune >/dev/null 2>&1
+# A file may still stand at that path — the point is whose conversation it holds.
+grep -lq "local_$B" "$DIR"/*.claudesession 2>/dev/null \
+  || fail "B's conversation was deleted to make room, despite --no-prune"
+grep -lq "local_$A" "$DIR"/*.claudesession 2>/dev/null || fail "A lost its file too"
 echo
 echo "PASS — sessions sharing one transcript keep distinct files and settle,"
 echo "       Claude's titles are left alone, and unchanged transcripts are not re-read"

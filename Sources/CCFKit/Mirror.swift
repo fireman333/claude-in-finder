@@ -145,7 +145,12 @@ public struct Mirror {
         sessions = Discovery.sessions()
         if skipArchived { sessions.removeAll { $0.isArchived } }
 
-        adoptOrphans(into: &index)
+        // One scan of the mirror serves both of the readers below. Nothing
+        // between here and the main loop moves a file — `adoptOrphans` only writes
+        // to the index — and reading every mirrored file to find out whose it is
+        // was the single most expensive thing a pass did.
+        let scan = scanMirrorDetailed()
+        adoptOrphans(into: &index, found: scan.found)
         let transcripts = Discovery.transcriptIndex()
 
         let fallbackNames = fallbackFolderNames(for: sessions)
@@ -159,7 +164,6 @@ public struct Mirror {
         // `scan` is frozen: it is the disk as the user left it, and the only
         // thing a rename in Finder can be read from. `locations` tracks where the
         // files are as this pass shuffles them, which is a different question.
-        let scan = scanMirrorDetailed()
         var locations = scan.found
         // Only a session this pass will reach can collect a file we set aside
         // for it. Anything else would be parked and left hidden indefinitely.
@@ -276,7 +280,9 @@ public struct Mirror {
             var complete = true
             func content() -> String {
                 if let rendered { return rendered }
-                let r = Render.render(for: session, transcript: transcript)
+                // Drain per session too: one transcript's worth of parsing should
+                // not still be resident while the next nine hundred are read.
+                let r = autoreleasepool { Render.render(for: session, transcript: transcript) }
                 rendered = r.html
                 complete = r.complete
                 return r.html
@@ -299,16 +305,21 @@ public struct Mirror {
                         $0.key != session.desktopID
                             && Self.normalize($0.value).path == Self.normalize(dest).path
                     }
-                    if let occupant, processing.contains(occupant.key) {
-                        if let parked = Self.freeParkingPath(for: occupant.key,
+                    if let occupant {
+                        // Only a session this pass will reach can collect a file we
+                        // set aside for it. One it will not reach is left exactly
+                        // where it is and waited on — it is somebody's conversation,
+                        // and `--no-prune` promises never to delete a mirrored file.
+                        if processing.contains(occupant.key),
+                           let parked = Self.freeParkingPath(for: occupant.key,
                                                              in: dest.deletingLastPathComponent()),
                            (try? fm.moveItem(at: dest, to: parked)) != nil {
                             locations[occupant.key] = Self.normalize(parked)
                             clear = true
                         }
                     } else {
-                        // Not a session we know: a leftover, or a file whose head we
-                        // could not read. Nothing tracks it, so nothing loses it.
+                        // No session claims this file: a leftover, or one whose head
+                        // we could not read. Nothing tracks it, so nothing loses it.
                         try? fm.removeItem(at: dest)
                         clear = !fm.fileExists(atPath: dest.path)
                     }
@@ -336,12 +347,20 @@ public struct Mirror {
             }
             locations[session.desktopID] = Self.normalize(dest)
 
+            // What the file on disk actually holds, which is not the same as what
+            // this pass rendered — see the incomplete case below.
+            var onDisk = previous?.hash
             if !fm.fileExists(atPath: dest.path) {
                 try write(content(), to: dest)
+                onDisk = hash
                 stats.created += 1
                 log("created: \(dest.path)")
-            } else if previous?.hash != hash {
+            } else if previous?.hash != hash, complete {
+                // Only when the transcript was read. A preview already sitting there
+                // is better than the empty page an unreadable transcript renders to;
+                // the fingerprint is left unset, so the next pass tries again.
                 try write(content(), to: dest)
+                onDisk = hash
                 stats.updated += 1
             }
 
@@ -350,7 +369,7 @@ public struct Mirror {
             // dropped it every pass, so `pendingAttempts` never reached the limit
             // that is meant to call off a rename Claude keeps overwriting.
             index.entries[session.desktopID] = Entry(
-                path: dest.path, title: session.title, hash: hash,
+                path: dest.path, title: session.title, hash: onDisk ?? hash,
                 pendingTitle: index.entries[session.desktopID]?.pendingTitle,
                 pendingAttempts: index.entries[session.desktopID]?.pendingAttempts,
                 fingerprint: complete ? fingerprint : nil
@@ -801,8 +820,8 @@ public struct Mirror {
     /// deleted on uninstall, and without this a reinstall would leave the old
     /// filename behind as an orphan the next time a session was retitled.
     /// Each file records its own desktop session id, so the index is rebuildable.
-    private func adoptOrphans(into index: inout Index) {
-        for (id, file) in scanMirror() {
+    private func adoptOrphans(into index: inout Index, found: [String: URL]) {
+        for (id, file) in found {
             // A tracked file that moved is handled by applyDragIntent and the main
             // pass; only genuinely unknown ids need adopting here.
             guard index.entries[id] == nil else { continue }

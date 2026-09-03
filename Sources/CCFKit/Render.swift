@@ -104,46 +104,62 @@ enum Render {
         // segmentation pass over every character in the file — on a transcript
         // of any size that dwarfs the JSON parsing it exists to feed, and the
         // lines are handed to JSONSerialization as bytes anyway.
-        for line in bytes.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true) {
-            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
-            else { continue }
+        let newline = UInt8(ascii: "\n")
+        var start = bytes.startIndex
 
-            guard let type = obj["type"] as? String, type == "user" || type == "assistant" else { continue }
-            // Sidechain entries are subagent chatter, not the main conversation.
-            if obj["isSidechain"] as? Bool == true { continue }
-            guard let message = obj["message"] as? [String: Any] else { continue }
+        while start < bytes.endIndex {
+            let end = bytes[start...].firstIndex(of: newline) ?? bytes.endIndex
+            defer { start = end < bytes.endIndex ? bytes.index(after: end) : bytes.endIndex }
+            guard end > start else { continue }
 
-            var text = ""
-            var tools: [String] = []
+            // Every line leaves autoreleased Foundation objects behind, and nothing
+            // drains them until the whole pass ends. Over tens of thousands of lines
+            // and then hundreds of sessions that is the difference between an agent
+            // that holds 30 MB and one that holds three gigabytes.
+            let parsed: (role: String, text: String, tools: [String])? = autoreleasepool {
+                guard let obj = try? JSONSerialization.jsonObject(with: bytes[start..<end])
+                            as? [String: Any],
+                      let type = obj["type"] as? String, type == "user" || type == "assistant",
+                      // Sidechain entries are subagent chatter, not the conversation.
+                      obj["isSidechain"] as? Bool != true,
+                      let message = obj["message"] as? [String: Any]
+                else { return nil }
 
-            if let s = message["content"] as? String {
-                text = s
-            } else if let blocks = message["content"] as? [[String: Any]] {
-                for block in blocks {
-                    switch block["type"] as? String {
-                    case "text":
-                        if let t = block["text"] as? String { text += t }
-                    case "tool_use":
-                        if let n = block["name"] as? String { tools.append(n) }
-                    default:
-                        continue   // thinking, tool_result, images: not shown in preview
+                var text = ""
+                var tools: [String] = []
+
+                if let s = message["content"] as? String {
+                    text = s
+                } else if let blocks = message["content"] as? [[String: Any]] {
+                    for block in blocks {
+                        switch block["type"] as? String {
+                        case "text":
+                            if let t = block["text"] as? String { text += t }
+                        case "tool_use":
+                            if let n = block["name"] as? String { tools.append(n) }
+                        default:
+                            continue   // thinking, tool_result, images: not shown
+                        }
                     }
                 }
-            }
 
-            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty && tools.isEmpty { continue }
-            // Skip the synthetic system reminders injected into user turns.
-            if text.hasPrefix("<system-reminder>") { continue }
+                text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if text.isEmpty && tools.isEmpty { return nil }
+                // Skip the synthetic system reminders injected into user turns.
+                if text.hasPrefix("<system-reminder>") { return nil }
+                return (type, text, tools)
+            }
+            guard let parsed else { continue }
 
             // A single assistant turn arrives as several lines (text, then one per
             // tool call). Coalesce runs of the same role so the preview reads as a
             // conversation rather than as a log of individual blocks.
-            if let last = out.last, last.role == type {
-                let joined = [last.text, text].filter { !$0.isEmpty }.joined(separator: "\n\n")
-                out[out.count - 1] = Message(role: type, text: joined, tools: last.tools + tools)
+            if let last = out.last, last.role == parsed.role {
+                let joined = [last.text, parsed.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                out[out.count - 1] = Message(role: parsed.role, text: joined,
+                                             tools: last.tools + parsed.tools)
             } else {
-                out.append(Message(role: type, text: text, tools: tools))
+                out.append(Message(role: parsed.role, text: parsed.text, tools: parsed.tools))
             }
         }
 

@@ -8,14 +8,28 @@ import AppKit
 ///   claude://code/new?folder=<path>         start a new session in a folder
 public enum SessionFile {
 
+    private static let metaPattern = try? NSRegularExpression(
+        pattern: #"<meta\s+name="([^"]+)"\s+content="([^"]*)">"#)
+
     /// Pulls `<meta name="..." content="...">` out of the file's head.
+    ///
+    /// Reads only that head. A mirrored session runs to tens of kilobytes and
+    /// every sync pass reads one per session purely to learn which conversation
+    /// it belongs to; pulling each file in whole to look at its first 4 KB was
+    /// most of what a pass spent its time on. Cutting at a byte count can split
+    /// the last character, which decodes to a replacement — it is past every
+    /// meta tag, so nothing here can see it.
     public static func meta(in url: URL) -> [String: String] {
-        guard let text = TimeLimited.text(at: url) else { return [:] }
-        let head = String(text.prefix(4096))
+        let head: String? = TimeLimited.run(2) {
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+            defer { try? handle.close() }
+            guard let data = try? handle.read(upToCount: 4096) else { return nil }
+            return String(decoding: data, as: UTF8.self)
+        } ?? nil
+        guard let head else { return [:] }
         var out: [String: String] = [:]
 
-        let pattern = #"<meta\s+name="([^"]+)"\s+content="([^"]*)">"#
-        guard let re = try? NSRegularExpression(pattern: pattern) else { return out }
+        guard let re = metaPattern else { return out }
         let ns = head as NSString
         for m in re.matches(in: head, range: NSRange(location: 0, length: ns.length)) {
             let key = ns.substring(with: m.range(at: 1))
