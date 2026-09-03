@@ -161,6 +161,9 @@ public struct Mirror {
         // files are as this pass shuffles them, which is a different question.
         let scan = scanMirrorDetailed()
         var locations = scan.found
+        // Only a session this pass will reach can collect a file we set aside
+        // for it. Anything else would be parked and left hidden indefinitely.
+        let processing = Set(sessions.map(\.desktopID))
         var deleted = Set<String>()
 
         for var session in sessions.sorted(by: { $0.sortDate > $1.sortDate }) {
@@ -205,7 +208,7 @@ public struct Mirror {
                 // Skip only the write-back — the session still needs the rest of
                 // this pass, which is what puts a parked file back.
                 if !renamed.isEmpty, !renamed.hasPrefix(Self.parkingPrefix),
-                   Self.withoutDisambiguator(renamed) != Self.sanitize(session.title) {
+                   Self.withoutDisambiguator(renamed, for: session) != Self.sanitize(session.title) {
                     try? SessionStore.rename(desktopID: session.desktopID, to: renamed)
                     session.title = renamed
                     index.entries[session.desktopID]?.path = current.path
@@ -267,11 +270,16 @@ public struct Mirror {
             // the transcript's bytes and nothing else, so while the fingerprint
             // matches, last pass's hash stands and not a byte has to be read.
             var rendered: String?
+            // A preview built from a transcript we could not read must not be
+            // remembered, or the empty one is served until the file's size or date
+            // happens to change.
+            var complete = true
             func content() -> String {
                 if let rendered { return rendered }
-                let html = Render.html(for: session, transcript: transcript)
-                rendered = html
-                return html
+                let r = Render.render(for: session, transcript: transcript)
+                rendered = r.html
+                complete = r.complete
+                return r.html
             }
             let reusable = previous?.fingerprint == fingerprint && !(previous?.hash ?? "").isEmpty
             let hash = reusable ? (previous?.hash ?? "") : Self.digest(content())
@@ -291,7 +299,7 @@ public struct Mirror {
                         $0.key != session.desktopID
                             && Self.normalize($0.value).path == Self.normalize(dest).path
                     }
-                    if let occupant {
+                    if let occupant, processing.contains(occupant.key) {
                         if let parked = Self.freeParkingPath(for: occupant.key,
                                                              in: dest.deletingLastPathComponent()),
                            (try? fm.moveItem(at: dest, to: parked)) != nil {
@@ -305,19 +313,25 @@ public struct Mirror {
                         clear = !fm.fileExists(atPath: dest.path)
                     }
                 }
-                // Could not clear the way: leave the file under the name it has and
-                // try again next pass. Waiting is always better than overwriting.
-                if clear {
-                    do {
-                        try fm.moveItem(at: oldURL, to: dest)
-                        stats.renamed += 1
-                        log("moved: \(oldURL.path) → \(dest.path)")
-                        pruneEmptyParent(of: oldURL)
-                    } catch {
-                        // Fall through and write a fresh file; a single stubborn path
-                        // should not take the rest of the sync down with it.
-                        log("move failed (\(error.localizedDescription)); rewriting instead")
-                    }
+                // Could not clear the way. Leave this session alone entirely and
+                // try again next pass — falling through would write its page over
+                // the occupant's file and stamp our id on their conversation,
+                // which is the very thing parking exists to avoid. The file keeps
+                // the name it has; the index still points at it; nothing is lost.
+                guard clear else {
+                    log("\(dest.lastPathComponent) is occupied; leaving \(oldURL.lastPathComponent) alone")
+                    continue
+                }
+                do {
+                    try fm.moveItem(at: oldURL, to: dest)
+                    stats.renamed += 1
+                    log("moved: \(oldURL.path) → \(dest.path)")
+                    pruneEmptyParent(of: oldURL)
+                } catch {
+                    // Fall through and write a fresh file; a single stubborn path
+                    // should not take the rest of the sync down with it. `dest` was
+                    // clear, so nothing of anyone else's is at stake.
+                    log("move failed (\(error.localizedDescription)); rewriting instead")
                 }
             }
             locations[session.desktopID] = Self.normalize(dest)
@@ -339,7 +353,7 @@ public struct Mirror {
                 path: dest.path, title: session.title, hash: hash,
                 pendingTitle: index.entries[session.desktopID]?.pendingTitle,
                 pendingAttempts: index.entries[session.desktopID]?.pendingAttempts,
-                fingerprint: fingerprint
+                fingerprint: complete ? fingerprint : nil
             )
         }
 
@@ -919,16 +933,20 @@ public struct Mirror {
         id.hasPrefix("local_") ? String(id.dropFirst("local_".count)) : id
     }
 
-    /// Removes a suffix `disambiguated` may have added, so a name we chose is not
-    /// mistaken for one the user typed.
-    private static func withoutDisambiguator(_ name: String) -> String {
+    /// Removes the suffix `disambiguated` would have given *this* session, so a
+    /// name we chose is not mistaken for one the user typed.
+    ///
+    /// Matched against that one session's own stem rather than against the shape
+    /// of a stem: digits are hex, so anything looser silently swallows a rename
+    /// to something like "Sprint · 202601" and never tells Claude about it.
+    private static func withoutDisambiguator(_ name: String, for session: Session) -> String {
         guard let sep = name.range(of: " · ", options: .backwards) else { return name }
-        let tail = name[sep.upperBound...]
-        guard tail.count >= 6, tail.prefix(6).allSatisfy(\.isHexDigit) else { return name }
-        let rest = tail.dropFirst(6)
-        guard rest.isEmpty
-                || (rest.count > 1 && rest.first == "-" && rest.dropFirst().allSatisfy(\.isNumber))
-        else { return name }
+        let tail = String(name[sep.upperBound...])
+        let stem = String(bareUUID(session.desktopID).prefix(6))
+        let numbered = tail.hasPrefix("\(stem)-")
+            && tail.count > stem.count + 1
+            && tail.dropFirst(stem.count + 1).allSatisfy(\.isNumber)
+        guard tail == stem || numbered else { return name }
         return String(name[..<sep.lowerBound])
     }
 
@@ -937,6 +955,11 @@ public struct Mirror {
     /// and modification date.
     private static func fingerprint(session: Session, transcript: URL?) -> String {
         var parts = [
+            // What the renderer produces is an input too. Without this, a release
+            // that changes the HTML or the stylesheet would leave every existing
+            // preview as it was, for good: the fingerprint would still match and
+            // the file would never be rewritten.
+            AppVersion.current,
             session.desktopID,
             session.cliSessionID ?? "",
             session.title,

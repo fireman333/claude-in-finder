@@ -13,7 +13,20 @@ enum Render {
     static let maxCharsPerMessage = 4000
 
     static func html(for session: Session, transcript: URL?) -> String {
-        let all = transcript.map { parse(jsonl: $0) } ?? []
+        render(for: session, transcript: transcript).html
+    }
+
+    /// Also reports whether the transcript could actually be read.
+    ///
+    /// A transcript that is only a placeholder in iCloud, or that the read gave
+    /// up waiting on, renders as an empty conversation. That is the right thing
+    /// to show, but the wrong thing to *remember*: a caller that caches this
+    /// preview would keep serving the empty one until the file's size or date
+    /// happened to change.
+    static func render(for session: Session, transcript: URL?) -> (html: String, complete: Bool) {
+        let parsed = transcript.flatMap { parse(jsonl: $0) }
+        let complete = transcript == nil || parsed != nil
+        let all = parsed ?? []
         // Keep the tail: the end of a conversation is what you need to recognise
         // it. Say so when there is a head to keep, though — a preview that opens
         // mid-conversation and does not admit it reads as a corrupted file.
@@ -46,7 +59,7 @@ enum Render {
             ? "Double-click to reopen this conversation in Claude Code desktop"
             : "This session has no CLI transcript id and cannot be reopened by deep link"
 
-        return """
+        let page = """
         <!doctype html>
         <html lang="en">
         <head>
@@ -68,6 +81,7 @@ enum Render {
         </body>
         </html>
         """
+        return (page, complete)
     }
 
     // MARK: - Transcript parsing
@@ -78,9 +92,11 @@ enum Render {
         let tools: [String]
     }
 
-    static func parse(jsonl: URL) -> [Message] {
+    /// Returns nil when the file could not be read at all, which a caller needs
+    /// to tell apart from a conversation that is genuinely empty.
+    static func parse(jsonl: URL) -> [Message]? {
         // Transcripts can be large and, on iCloud, not actually present yet.
-        guard let bytes = TimeLimited.data(at: jsonl, seconds: 5) else { return [] }
+        guard let bytes = TimeLimited.data(at: jsonl, seconds: 5) else { return nil }
         var out: [Message] = []
 
         // Split on newline bytes rather than on a String. Swift's String is a

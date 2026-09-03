@@ -140,6 +140,52 @@ msg assistant "a new turn" >> "$TRANSCRIPT"
 "$CCFINDER" sync >/dev/null 2>&1
 grep -q "a new turn" "$SOLO" || fail "an appended turn never reached the preview"
 
+echo "9. a page is never written onto a path that could not be cleared"
+# Two sessions must swap names, but every slot to set the occupant aside in is
+# taken. Falling through would write one session's page over the other's file.
+write_session "$A" "Contested" 1790000000000
+write_session "$B" "Contested" 1791000000000
+"$CCFINDER" sync >/dev/null 2>&1
+write_session "$A" "Contested" 1792000000000   # A is now newer: they must trade
+for n in 1 $(seq 2 50); do
+  [ "$n" = 1 ] && f="$DIR/.ccf-moving-$B.claudesession" || f="$DIR/.ccf-moving-$B-$n.claudesession"
+  : > "$f"
+done
+"$CCFINDER" sync >/dev/null 2>&1
+grep -lq "local_$B" "$DIR"/*.claudesession 2>/dev/null \
+  || fail "B's conversation was overwritten by A when the way could not be cleared"
+grep -lq "local_$A" "$DIR"/*.claudesession 2>/dev/null || fail "A's file was lost"
+[ "$(archived_of "$B")" = "False" ] || fail "B was archived after the blocked swap"
+rm -f "$DIR"/.ccf-moving-*
+
+echo "10. a rename that merely looks like our suffix is still passed to Claude"
+# " · 202601" has the shape of a disambiguator — digits are hex — but it is not
+# this session's, so it is a name the user typed.
+rm -f "$CCF_SESSIONS/local_$B.json"
+"$CCFINDER" sync >/dev/null 2>&1
+SOLO2="$(grep -l "local_$A" "$DIR"/*.claudesession | head -1)"
+mv "$SOLO2" "$DIR/Sprint · 202601.claudesession"
+"$CCFINDER" sync >/dev/null 2>&1
+[ "$(title_of "$A")" = "Sprint · 202601" ] \
+  || fail "a real rename was swallowed as a disambiguator; title is '$(title_of "$A")'"
+
+echo "11. a build that renders differently refreshes every preview once"
+"$CCFINDER" sync >/dev/null 2>&1
+OUT="$("$CCFINDER" sync)"
+echo "$OUT" | grep -q "updated 0" || fail "not settled before the upgrade: $OUT"
+# Prove the new build actually re-rendered by making the transcript unreadable:
+# a pass that reuses the stored preview cannot notice, one that re-renders must.
+chmod -r "$TRANSCRIPT"
+OUT="$(CCF_VERSION=99.9.9 "$CCFINDER" sync 2>/dev/null)"
+chmod +r "$TRANSCRIPT"
+FILE="$(grep -l "local_$A" "$DIR"/*.claudesession | head -1)"
+grep -q "No messages to show" "$FILE" \
+  || fail "a new build served the old build's preview instead of re-rendering: $OUT"
+
+echo "12. a transcript that was briefly unreadable is not remembered as empty"
+OUT="$(CCF_VERSION=99.9.9 "$CCFINDER" sync)"
+FILE="$(grep -l "local_$A" "$DIR"/*.claudesession | head -1)"
+grep -q "hi there" "$FILE" || fail "the empty preview was cached and never retried: $OUT"
 echo
 echo "PASS — sessions sharing one transcript keep distinct files and settle,"
 echo "       Claude's titles are left alone, and unchanged transcripts are not re-read"
