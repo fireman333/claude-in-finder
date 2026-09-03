@@ -80,12 +80,16 @@ enum Render {
 
     static func parse(jsonl: URL) -> [Message] {
         // Transcripts can be large and, on iCloud, not actually present yet.
-        guard let handle = TimeLimited.text(at: jsonl, seconds: 5) else { return [] }
+        guard let bytes = TimeLimited.data(at: jsonl, seconds: 5) else { return [] }
         var out: [Message] = []
 
-        for line in handle.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        // Split on newline bytes rather than on a String. Swift's String is a
+        // sequence of grapheme clusters, so splitting one costs a full Unicode
+        // segmentation pass over every character in the file — on a transcript
+        // of any size that dwarfs the JSON parsing it exists to feed, and the
+        // lines are handed to JSONSerialization as bytes anyway.
+        for line in bytes.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true) {
+            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
             else { continue }
 
             guard let type = obj["type"] as? String, type == "user" || type == "assistant" else { continue }

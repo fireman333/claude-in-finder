@@ -4,6 +4,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# --show-bin-path only prints the path, it does not build. Without this the
+# whole suite silently exercises whatever binary was last compiled.
+swift build -c release --package-path "$ROOT" >/dev/null
 CCFINDER="$(swift build -c release --show-bin-path --package-path "$ROOT")/ccfinder"
 TMP="$(mktemp -d)"
 

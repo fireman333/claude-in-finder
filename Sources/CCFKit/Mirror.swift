@@ -25,6 +25,9 @@ public struct Mirror {
         /// A rename made in Finder that Claude has not accepted yet.
         var pendingTitle: String?
         var pendingAttempts: Int?
+        /// The inputs the rendered HTML is made of. Unchanged means last pass's
+        /// `hash` still stands and the transcript need not be read again.
+        var fingerprint: String?
     }
 
     struct Index: Codable {
@@ -153,7 +156,11 @@ public struct Mirror {
 
         // Newest first so that, on a filename clash, the session you touched most
         // recently keeps the clean name and the older one gets the suffix.
+        // `scan` is frozen: it is the disk as the user left it, and the only
+        // thing a rename in Finder can be read from. `locations` tracks where the
+        // files are as this pass shuffles them, which is a different question.
         let scan = scanMirrorDetailed()
+        var locations = scan.found
         var deleted = Set<String>()
 
         for var session in sessions.sorted(by: { $0.sortDate > $1.sortDate }) {
@@ -191,7 +198,14 @@ public struct Mirror {
                current.deletingLastPathComponent().path
                    == URL(fileURLWithPath: previous.path).deletingLastPathComponent().path {
                 let renamed = current.deletingPathExtension().lastPathComponent
-                if !renamed.isEmpty, renamed != Self.sanitize(session.title) {
+                // Two names here are ours, not the user's, and writing either back
+                // as the session's title is how the mirror used to end up arguing
+                // with itself: the " · abc123" that separates two sessions wanting
+                // one name, and the file a pass that died mid-swap left parked.
+                // Skip only the write-back — the session still needs the rest of
+                // this pass, which is what puts a parked file back.
+                if !renamed.isEmpty, !renamed.hasPrefix(Self.parkingPrefix),
+                   Self.withoutDisambiguator(renamed) != Self.sanitize(session.title) {
                     try? SessionStore.rename(desktopID: session.desktopID, to: renamed)
                     session.title = renamed
                     index.entries[session.desktopID]?.path = current.path
@@ -229,7 +243,7 @@ public struct Mirror {
             var name = Self.sanitize(session.title)
             var dest = root.appendingPathComponent("\(name).claudesession")
             if usedPaths.contains(dest.path) {
-                name += " · \(String((session.cliSessionID ?? session.desktopID).prefix(6)))"
+                name = Self.disambiguated(name, for: session, avoiding: usedPaths, in: root)
                 dest = root.appendingPathComponent("\(name).claudesession")
             }
             usedPaths.insert(dest.path)
@@ -237,20 +251,60 @@ public struct Mirror {
             try fm.createDirectory(at: root, withIntermediateDirectories: true)
             roots.insert(root)
 
-            let content = Render.html(for: session, transcript: transcripts[session.cliSessionID ?? ""])
-            let hash = Self.digest(content)
+            let transcript = transcripts[session.cliSessionID ?? ""]
+            let fingerprint = Self.fingerprint(session: session, transcript: transcript)
 
             let previous = index.entries[session.desktopID]
-            let oldURL = previous.map { URL(fileURLWithPath: $0.path) }
+            // Where this session's file actually is, according to the file itself.
+            // The index is a step behind whenever two sessions trade names within
+            // one pass, and following it then moves somebody else's file.
+            let oldURL = locations[session.desktopID]
+                ?? previous.map { URL(fileURLWithPath: $0.path) }
+
+            // Rendering a session means reading and parsing its entire transcript,
+            // and with hundreds of sessions on disk that is very nearly the whole
+            // cost of a pass. The HTML is a function of the fingerprint's fields and
+            // the transcript's bytes and nothing else, so while the fingerprint
+            // matches, last pass's hash stands and not a byte has to be read.
+            var rendered: String?
+            func content() -> String {
+                if let rendered { return rendered }
+                let html = Render.html(for: session, transcript: transcript)
+                rendered = html
+                return html
+            }
+            let reusable = previous?.fingerprint == fingerprint && !(previous?.hash ?? "").isEmpty
+            let hash = reusable ? (previous?.hash ?? "") : Self.digest(content())
 
             // Retitled, or the layout changed under it: move the existing file so
             // Finder metadata survives.
-            if let previous, let oldURL, previous.path != dest.path, fm.fileExists(atPath: oldURL.path) {
+            if let oldURL, Self.normalize(oldURL).path != Self.normalize(dest).path,
+               fm.fileExists(atPath: oldURL.path) {
+                // Something is already standing where this one goes. Two sessions
+                // sharing a transcript swap names the moment the older one is used
+                // again, and deleting whatever is in the way then destroys a file
+                // that was only passing through. Park it instead: its own turn in
+                // this pass will collect it from where we left it.
+                if fm.fileExists(atPath: dest.path) {
+                    let occupant = locations.first {
+                        $0.key != session.desktopID
+                            && Self.normalize($0.value).path == Self.normalize(dest).path
+                    }
+                    if let occupant {
+                        let parked = dest.deletingLastPathComponent().appendingPathComponent(
+                            "\(Self.parkingPrefix)\(Self.bareUUID(occupant.key)).claudesession")
+                        try? fm.removeItem(at: parked)
+                        if (try? fm.moveItem(at: dest, to: parked)) != nil {
+                            locations[occupant.key] = Self.normalize(parked)
+                        }
+                    } else {
+                        try? fm.removeItem(at: dest)
+                    }
+                }
                 do {
-                    if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
                     try fm.moveItem(at: oldURL, to: dest)
                     stats.renamed += 1
-                    log("moved: \(previous.path) → \(dest.path)")
+                    log("moved: \(oldURL.path) → \(dest.path)")
                     pruneEmptyParent(of: oldURL)
                 } catch {
                     // Fall through and write a fresh file; a single stubborn path
@@ -258,18 +312,27 @@ public struct Mirror {
                     log("move failed (\(error.localizedDescription)); rewriting instead")
                 }
             }
+            locations[session.desktopID] = Self.normalize(dest)
 
             if !fm.fileExists(atPath: dest.path) {
-                try write(content, to: dest)
+                try write(content(), to: dest)
                 stats.created += 1
                 log("created: \(dest.path)")
             } else if previous?.hash != hash {
-                try write(content, to: dest)
+                try write(content(), to: dest)
                 stats.updated += 1
             }
 
             stamp(dest, with: session)
-            index.entries[session.desktopID] = Entry(path: dest.path, title: session.title, hash: hash)
+            // Carry the pending rename forward. Rebuilding the entry from scratch
+            // dropped it every pass, so `pendingAttempts` never reached the limit
+            // that is meant to call off a rename Claude keeps overwriting.
+            index.entries[session.desktopID] = Entry(
+                path: dest.path, title: session.title, hash: hash,
+                pendingTitle: index.entries[session.desktopID]?.pendingTitle,
+                pendingAttempts: index.entries[session.desktopID]?.pendingAttempts,
+                fingerprint: fingerprint
+            )
         }
 
         // Remove mirror files for sessions that are gone. Only files we created and
@@ -801,6 +864,73 @@ public struct Mirror {
             try? fm.removeItem(at: dir)
             dir = parent
         }
+    }
+
+    /// The suffix that separates two sessions wanting the same file name.
+    ///
+    /// It has to come from the *desktop* id. Two desktop sessions can share one
+    /// CLI transcript, and keying off the CLI id then gave both of them the same
+    /// "unique" suffix: each pass moved one file on top of the other, the survivor
+    /// disagreed with the index about whose it was, and that read as a rename in
+    /// Finder.
+    private static func disambiguated(_ name: String, for session: Session,
+                                      avoiding used: Set<String>, in root: URL) -> String {
+        let stem = String(bareUUID(session.desktopID).prefix(6))
+        var candidate = "\(name) · \(stem)"
+        var n = 2
+        while used.contains(root.appendingPathComponent("\(candidate).claudesession").path) {
+            candidate = "\(name) · \(stem)-\(n)"
+            n += 1
+        }
+        return candidate
+    }
+
+    /// Prefix for a file set aside while two sessions trade names. Hidden, and
+    /// recognisable, so a pass that dies mid-swap leaves something the next pass
+    /// can put back rather than something it reads as a rename.
+    static let parkingPrefix = ".ccf-moving-"
+
+    /// Claude's own session ids are "local_<uuid>"; the uuid alone is what names
+    /// things on our side.
+    static func bareUUID(_ id: String) -> String {
+        id.hasPrefix("local_") ? String(id.dropFirst("local_".count)) : id
+    }
+
+    /// Removes a suffix `disambiguated` may have added, so a name we chose is not
+    /// mistaken for one the user typed.
+    private static func withoutDisambiguator(_ name: String) -> String {
+        guard let sep = name.range(of: " · ", options: .backwards) else { return name }
+        let tail = name[sep.upperBound...]
+        guard tail.count >= 6, tail.prefix(6).allSatisfy(\.isHexDigit) else { return name }
+        let rest = tail.dropFirst(6)
+        guard rest.isEmpty
+                || (rest.count > 1 && rest.first == "-" && rest.dropFirst().allSatisfy(\.isNumber))
+        else { return name }
+        return String(name[..<sep.lowerBound])
+    }
+
+    /// Everything `Render.html` reads, boiled down to one comparable string: the
+    /// session fields that reach the page, plus the transcript's identity, size
+    /// and modification date.
+    private static func fingerprint(session: Session, transcript: URL?) -> String {
+        var parts = [
+            session.desktopID,
+            session.cliSessionID ?? "",
+            session.title,
+            session.cwd,
+            session.model ?? "",
+            session.lastActivityAt.map { String($0.timeIntervalSince1970) } ?? "",
+        ]
+        if let transcript {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: transcript.path)
+            let size = (attrs?[.size] as? NSNumber)?.stringValue ?? "?"
+            let mtime = (attrs?[.modificationDate] as? Date)
+                .map { String($0.timeIntervalSince1970) } ?? "?"
+            parts.append("\(transcript.path)|\(size)|\(mtime)")
+        } else {
+            parts.append("no transcript")
+        }
+        return digest(parts.joined(separator: "\u{1}"))
     }
 
     static func sanitize(_ raw: String) -> String {

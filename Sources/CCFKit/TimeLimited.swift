@@ -30,4 +30,11 @@ public enum TimeLimited {
     public static func text(at url: URL, seconds: TimeInterval = 2) -> String? {
         run(seconds) { try? String(contentsOf: url, encoding: .utf8) } ?? nil
     }
+
+    /// Reads a file as bytes, mapped rather than copied where the system allows
+    /// it. Transcripts run to tens of megabytes, and the ones being read here are
+    /// scanned once and dropped.
+    public static func data(at url: URL, seconds: TimeInterval = 2) -> Data? {
+        run(seconds) { try? Data(contentsOf: url, options: .mappedIfSafe) } ?? nil
+    }
 }
