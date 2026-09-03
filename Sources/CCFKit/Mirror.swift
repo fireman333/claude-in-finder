@@ -44,6 +44,33 @@ public struct Mirror {
         var newSessionFileEnabled: Bool?
     }
 
+    /// What a pass did, and what the watcher needs to know about it.
+    public struct Outcome {
+        public var created = 0
+        public var renamed = 0
+        public var updated = 0
+        public var removed = 0
+        /// The folders to follow, worked out from the sessions this pass already
+        /// read rather than by going back to disk for them again.
+        public var watchPaths: [String] = []
+        /// Every file this pass wrote. Stamping a file is a write in a watched
+        /// folder, so a pass hands itself an FSEvent and answers it with another
+        /// pass that can only ever find nothing; these are how the watcher tells
+        /// its own handiwork from something the user did.
+        public var selfWrites: Set<String> = []
+    }
+
+    /// Collects the paths a pass writes, across the several places that write them.
+    final class WriteLog {
+        private(set) var paths: Set<String> = []
+        /// The folder counts too: writing a file into one is a change to the
+        /// folder, and that arrives as its own event.
+        func add(_ url: URL) {
+            paths.insert(Mirror.normalize(url).path)
+            paths.insert(Mirror.normalize(url.deletingLastPathComponent()).path)
+        }
+    }
+
     /// Leave archived sessions out of the mirror entirely (command line only).
     public var skipArchived: Bool
     public var prune: Bool
@@ -124,7 +151,7 @@ public struct Mirror {
     // MARK: - Entry point
 
     @discardableResult
-    public func reconcile() throws -> (created: Int, renamed: Int, updated: Int, removed: Int) {
+    public func reconcile() throws -> Outcome {
         try fm.createDirectory(at: Paths.support, withIntermediateDirectories: true)
 
         // Only one reconcile at a time, across every process. Two of them running
@@ -138,7 +165,7 @@ public struct Mirror {
         trashCache = nil
         var index = loadIndex()
         var sessions = Discovery.sessions()
-        applyUserIntent(index: index)
+        applyUserIntent(index: index, sessions: sessions)
 
         // Intent may have changed archive flags or removed records; re-read so the
         // pass below works from what Claude's records now actually say.
@@ -149,12 +176,13 @@ public struct Mirror {
         // between here and the main loop moves a file — `adoptOrphans` only writes
         // to the index — and reading every mirrored file to find out whose it is
         // was the single most expensive thing a pass did.
-        let scan = scanMirrorDetailed()
+        let scan = scanMirrorDetailed(sessions: sessions)
         adoptOrphans(into: &index, found: scan.found)
         let transcripts = Discovery.transcriptIndex()
 
         let fallbackNames = fallbackFolderNames(for: sessions)
-        var stats = (created: 0, renamed: 0, updated: 0, removed: 0)
+        var out = Outcome()
+        let writes = WriteLog()
         var live = Set<String>()
         var usedPaths = Set<String>()
         var roots = Set<URL>()
@@ -335,7 +363,7 @@ public struct Mirror {
                 }
                 do {
                     try fm.moveItem(at: oldURL, to: dest)
-                    stats.renamed += 1
+                    out.renamed += 1
                     log("moved: \(oldURL.path) → \(dest.path)")
                     pruneEmptyParent(of: oldURL)
                 } catch {
@@ -353,20 +381,20 @@ public struct Mirror {
             // there was not written by this pass, so the next one rewrites it.
             var onDisk = previous?.hash ?? ""
             if !fm.fileExists(atPath: dest.path) {
-                try write(content(), to: dest)
+                try write(content(), to: dest, log: writes)
                 onDisk = hash
-                stats.created += 1
+                out.created += 1
                 log("created: \(dest.path)")
             } else if previous?.hash != hash, complete {
                 // Only when the transcript was read. A preview already sitting there
                 // is better than the empty page an unreadable transcript renders to;
                 // the fingerprint is left unset, so the next pass tries again.
-                try write(content(), to: dest)
+                try write(content(), to: dest, log: writes)
                 onDisk = hash
-                stats.updated += 1
+                out.updated += 1
             }
 
-            stamp(dest, with: session)
+            stamp(dest, with: session, log: writes)
             // Carry the pending rename forward. Rebuilding the entry from scratch
             // dropped it every pass, so `pendingAttempts` never reached the limit
             // that is meant to call off a rename Claude keeps overwriting.
@@ -386,7 +414,7 @@ public struct Mirror {
                 if fm.fileExists(atPath: url.path) {
                     try? fm.removeItem(at: url)
                     pruneEmptyParent(of: url)
-                    stats.removed += 1
+                    out.removed += 1
                     log("removed: \(entry.path)")
                 }
                 index.entries.removeValue(forKey: id)
@@ -424,14 +452,16 @@ public struct Mirror {
         index.noNewSessionFile = suppressed.sorted()
         var placed2 = placed
 
-        try writeFolderExtras(roots: roots, sessions: sessions, fallbackNames: fallbackNames,
+        try writeFolderExtras(roots: roots, sessions: sessions, fallbackNames: fallbackNames, log: writes,
                               suppressedNewSession: showNewSessionFile ? suppressed : Set(roots.map(\.path)),
                               placedNewSession: &placed2)
         sweepEmptyArchives(roots: roots)
         applyArchiveVisibility(roots: roots)
         index.newSessionFolders = placed2.sorted()
         try saveIndex(index)
-        return stats
+        out.watchPaths = watchPaths(sessions: sessions)
+        out.selfWrites = writes.paths
+        return out
     }
 
     // MARK: - Where a session's file belongs
@@ -495,7 +525,7 @@ public struct Mirror {
     /// git repositories, by adding an entry to .git/info/exclude — which is local
     /// to the clone and never committed.
     private func writeFolderExtras(roots: Set<URL>, sessions: [Session],
-                                   fallbackNames: [String: String],
+                                   fallbackNames: [String: String], log: WriteLog,
                                    suppressedNewSession: Set<String>,
                                    placedNewSession: inout Set<String>) throws {
         // Keyed by path, not by URL: URL(fileURLWithPath:) stats the filesystem to
@@ -515,13 +545,14 @@ public struct Mirror {
             let marker = dir.appendingPathComponent(".ccf-project")
             if TimeLimited.text(at: marker) != cwd {
                 try? cwd.write(to: marker, atomically: true, encoding: .utf8)
+                log.add(marker)
             }
 
             let opener = dir.appendingPathComponent("+ New Session.claudesession")
             if suppressedNewSession.contains(dir.path) { continue }
             let html = Self.newSessionHTML(cwd: cwd)
             if TimeLimited.text(at: opener) != html {
-                try? write(html, to: opener)
+                try? write(html, to: opener, log: log)
             }
             placedNewSession.insert(dir.path)
 
@@ -637,8 +668,8 @@ public struct Mirror {
     /// that follows then agrees with where the file already is, so nothing moves
     /// back and forth. Moves that do not cross that boundary are ignored, and the
     /// file is returned to its place by the normal pass.
-    private func applyUserIntent(index: Index) {
-        let found = scanMirror()
+    private func applyUserIntent(index: Index, sessions: [Session]) {
+        let found = scanMirror(sessions: sessions)
 
         for (id, entry) in index.entries {
             guard let current = found[id], current.path != entry.path else { continue }
@@ -710,14 +741,16 @@ public struct Mirror {
     }
 
     /// Every mirrored file we can find, keyed by its desktop session id.
-    private func scanMirror() -> [String: URL] { scanMirrorDetailed().found }
+    private func scanMirror(sessions: [Session]) -> [String: URL] {
+        scanMirrorDetailed(sessions: sessions).found
+    }
 
     /// Also reports which folders answered, so a folder we could not read is never
     /// mistaken for a folder whose files were deleted.
-    private func scanMirrorDetailed() -> (found: [String: URL], listed: Set<String>) {
+    private func scanMirrorDetailed(sessions: [Session]) -> (found: [String: URL], listed: Set<String>) {
         var out: [String: URL] = [:]
         var listed = Set<String>()
-        for dir in candidateFolders() {
+        for dir in candidateFolders(sessions: sessions) {
             guard let files = contents(of: dir) else { continue }
             listed.insert(Self.normalize(dir).path)
             for file in files where file.pathExtension == "claudesession" {
@@ -806,9 +839,12 @@ public struct Mirror {
     }
 
     /// Directories the watcher should follow so that dragging a file is noticed.
-    public func watchPaths() -> [String] {
+    public func watchPaths() -> [String] { watchPaths(sessions: Discovery.sessions()) }
+
+    /// The same, for a caller that has just read the sessions and need not pay
+    /// for reading all of them a second time.
+    public func watchPaths(sessions: [Session]) -> [String] {
         var paths = [Paths.desktopSessions.path]
-        let sessions = Discovery.sessions()
         let names = fallbackFolderNames(for: sessions)
         for cwd in Set(sessions.map(\.cwd)) {
             let root = mainRoot(cwd: cwd, fallbackNames: names)
@@ -835,10 +871,10 @@ public struct Mirror {
 
     /// Every folder that could hold mirrored files: the per-project folders inside
     /// each known working directory, plus everything under the central mirror.
-    private func candidateFolders() -> [URL] {
+    private func candidateFolders(sessions: [Session]) -> [URL] {
         var out: [URL] = []
 
-        for cwd in Set(Discovery.sessions().map(\.cwd)) where !cwd.isEmpty {
+        for cwd in Set(sessions.map(\.cwd)) where !cwd.isEmpty {
             let dir = URL(fileURLWithPath: cwd).appendingPathComponent(Self.folderName)
             if fm.fileExists(atPath: dir.path) { out.append(dir) }
             let archive = dir.appendingPathComponent(Self.archiveFolderName)
@@ -860,7 +896,8 @@ public struct Mirror {
 
     // MARK: - Helpers
 
-    private func write(_ s: String, to url: URL) throws {
+    private func write(_ s: String, to url: URL, log: WriteLog? = nil) throws {
+        log?.add(url)
         // Deliberately NOT atomic: an atomic write replaces the inode and would
         // drop the file's extended attributes, i.e. the user's Finder tags.
         try Data(s.utf8).write(to: url)
@@ -876,7 +913,7 @@ public struct Mirror {
     /// Skipped when they already match. Writing attributes fires an FSEvent, and
     /// the watcher listening for it would sync again, stamp again, and never
     /// settle.
-    private func stamp(_ url: URL, with session: Session) {
+    private func stamp(_ url: URL, with session: Session, log: WriteLog? = nil) {
         guard let modified = session.lastActivityAt ?? session.createdAt else { return }
         let created = session.createdAt ?? modified
 
@@ -889,6 +926,7 @@ public struct Mirror {
 
         try? fm.setAttributes([.modificationDate: modified, .creationDate: created],
                               ofItemAtPath: url.path)
+        log?.add(url)
     }
 
     private func pruneEmptyParent(of url: URL) {

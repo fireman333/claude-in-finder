@@ -19,6 +19,9 @@ public final class Watcher {
     private var stream: FSEventStreamRef?
     private var timer: DispatchSourceTimer?
     private var watched: [String] = []
+    /// What the last pass wrote, so its own echo can be told from a real change.
+    private var selfWrites: Set<String> = []
+    private var verify: DispatchWorkItem?
 
     public init(mirror: @escaping @Sendable () -> Mirror, debounce: TimeInterval = 1.5) {
         self.makeMirror = mirror
@@ -34,8 +37,7 @@ public final class Watcher {
     /// dispatch queue, so nothing here needs a run loop of its own — an earlier
     /// version parked a thread on one and spun a core doing nothing.
     public func start(fullResyncEvery: TimeInterval = 300) {
-        sync(reason: "startup")
-        restartStream()
+        sync(reason: "startup")   // also opens the stream, on the paths it read
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + fullResyncEvery, repeating: fullResyncEvery)
@@ -61,8 +63,7 @@ public final class Watcher {
     /// dragging a file into or out of Archive is picked up as quickly as a change
     /// made inside Claude. The set of mirror folders grows as you work in new
     /// projects, so the stream is rebuilt whenever it changes.
-    private func restartStream() {
-        let paths = makeMirror().watchPaths()
+    private func restartStream(paths: [String]) {
         guard paths != watched else { return }
         watched = paths
 
@@ -74,9 +75,14 @@ public final class Watcher {
         }
         guard !paths.isEmpty else { return }
 
-        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+        let callback: FSEventStreamCallback = { _, info, count, eventPaths, eventFlags, _ in
             guard let info else { return }
-            Unmanaged<Watcher>.fromOpaque(info).takeUnretainedValue().schedule()
+            let paths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] ?? []
+            var events: [(path: String, flags: FSEventStreamEventFlags)] = []
+            for i in 0..<count where i < paths.count {
+                events.append((paths[i], eventFlags[i]))
+            }
+            Unmanaged<Watcher>.fromOpaque(info).takeUnretainedValue().schedule(events)
         }
 
         var context = FSEventStreamContext(
@@ -85,8 +91,11 @@ public final class Watcher {
             retain: nil, release: nil, copyDescription: nil
         )
 
+        // UseCFTypes so the callback is handed real strings: which paths changed
+        // is what tells our own writes from yours.
         let flags = FSEventStreamCreateFlags(
             kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer
+                | kFSEventStreamCreateFlagUseCFTypes
         )
 
         guard let created = FSEventStreamCreate(
@@ -102,7 +111,44 @@ public final class Watcher {
         Log.line("watching \(paths.count) folder(s)")
     }
 
-    private func schedule() {
+    /// A file going away or changing its name is never our echo in any way worth
+    /// guessing about: whatever else is true, the mirror has to look.
+    ///
+    /// Not `ItemCreated`. These flags accumulate over a path's history rather than
+    /// describing this one event, so a file the mirror wrote minutes ago still
+    /// arrives marked as created every time it is touched — testing for it would
+    /// mean never recognising our own writing at all.
+    private static let structural = FSEventStreamEventFlags(
+        kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed
+    )
+
+    private func schedule(_ events: [(path: String, flags: FSEventStreamEventFlags)]) {
+        // A pass gives every file it mirrors the conversation's own dates, and
+        // writing dates in a folder we watch is a change like any other. The event
+        // comes back a second later and buys a whole second pass that can only ever
+        // find nothing — one real change, two passes, for as long as you keep
+        // working. It is that echo when every event is a plain edit to a file this
+        // process just wrote. Dragging one into Archive/ is a rename, so it wakes
+        // us however familiar the path looks.
+        if !events.isEmpty, !selfWrites.isEmpty,
+           events.allSatisfy({ event in
+               event.flags & Self.structural == 0
+                   && selfWrites.contains(Mirror.normalize(URL(fileURLWithPath: event.path)).path)
+           }) {
+            selfWrites = []          // never swallow twice on one pass's account
+            // Not simply dropped. If that reading is ever wrong, the change behind
+            // it would wait for the periodic resync, minutes away; look again
+            // shortly instead, and let any real event arriving first take over.
+            let check = DispatchWorkItem { [weak self] in self?.sync(reason: "after echo") }
+            verify?.cancel()
+            verify = check
+            queue.asyncAfter(deadline: .now() + 20, execute: check)
+            return
+        }
+
+        selfWrites = []
+        verify?.cancel()
+        verify = nil
         pending?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.sync(reason: "fsevent") }
         pending = work
@@ -111,22 +157,73 @@ public final class Watcher {
 
     private func sync(reason: String) {
         do {
-            let s = try makeMirror().reconcile()
-            if s.created + s.renamed + s.updated + s.removed > 0 {
+            let mirror = makeMirror()
+            let s = try mirror.reconcile()
+            // Every pass is logged when asked to be verbose, changes or not: how
+            // many passes one change costs is otherwise invisible.
+            if s.created + s.renamed + s.updated + s.removed > 0 || mirror.verbose {
                 Log.line("[\(reason)] +\(s.created) ~\(s.updated) ↻\(s.renamed) -\(s.removed)")
             }
+            selfWrites = s.selfWrites
             // New project folders appear as you work; follow them.
-            restartStream()
+            restartStream(paths: s.watchPaths)
         } catch {
             Log.line("[\(reason)] sync failed: \(error.localizedDescription)")
+            // Nothing is known about what was written, so claim nothing.
+            selfWrites = []
+            restartStream(paths: makeMirror().watchPaths())
         }
     }
 }
 
 public enum Log {
+    private static let lock = NSLock()
+    private static var sinceCheck = 500       // so the first line checks, then every 500
+
     public static func line(_ msg: String) {
         let df = ISO8601DateFormatter()
         let text = "\(df.string(from: Date())) \(msg)\n"
         FileHandle.standardError.write(Data(text.utf8))
+        trimIfHuge()
+    }
+
+    private static let cap = 8 * 1024 * 1024
+    private static let keep = 2 * 1024 * 1024
+
+    /// Keeps the agent's log from growing without bound.
+    ///
+    /// launchd opened this file and holds the descriptor, so it cannot be rotated
+    /// out from under it — renaming it would leave every later line going to the
+    /// file under its old name. Shortening it in place is safe only if the
+    /// descriptor is in append mode, where each write seeks to the end on its own;
+    /// otherwise writing would carry on at the offset it had reached and leave a
+    /// hole megabytes wide. Both that and the file being the one we are actually
+    /// writing to are checked rather than assumed, because the command line shares
+    /// this code and its output belongs to whoever ran it.
+    private static func trimIfHuge() {
+        lock.lock(); defer { lock.unlock() }
+        sinceCheck += 1
+        guard sinceCheck >= 500 else { return }
+        sinceCheck = 0
+
+        guard fcntl(STDERR_FILENO, F_GETFL) & O_APPEND != 0 else { return }
+        let url = Paths.support.appendingPathComponent("ccfinder.log")
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+              let size = (attrs[.size] as? NSNumber)?.intValue, size > cap,
+              let inode = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value
+        else { return }
+
+        var here = stat()
+        guard fstat(STDERR_FILENO, &here) == 0, here.st_ino == inode else { return }
+
+        guard let handle = try? FileHandle(forUpdating: url) else { return }
+        defer { try? handle.close() }
+        // Keep the end of it: what a log is for is the last thing that happened.
+        try? handle.seek(toOffset: UInt64(size - keep))
+        guard let tail = try? handle.readToEnd() else { return }
+        try? handle.seek(toOffset: 0)
+        try? handle.write(contentsOf: tail)
+        try? handle.truncate(atOffset: UInt64(tail.count))
     }
 }
