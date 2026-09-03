@@ -1084,8 +1084,10 @@ public struct Mirror {
         try enc.encode(index).write(to: Paths.indexFile)
     }
 
+    /// Through `Log` like everything else, so verbose output is timestamped and
+    /// counts towards the size the log is kept under.
     private func log(_ msg: String) {
         guard verbose else { return }
-        FileHandle.standardError.write(Data("\(msg)\n".utf8))
+        Log.line(msg)
     }
 }

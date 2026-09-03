@@ -37,7 +37,10 @@ public final class Watcher {
     /// dispatch queue, so nothing here needs a run loop of its own — an earlier
     /// version parked a thread on one and spun a core doing nothing.
     public func start(fullResyncEvery: TimeInterval = 300) {
-        sync(reason: "startup")   // also opens the stream, on the paths it read
+        // On the queue, like every other pass: run here it would race a "Sync Now"
+        // arriving while the app is still starting, and the two would trample the
+        // watcher's own state. The reconcile lock guards the mirror, not this.
+        queue.async { [weak self] in self?.sync(reason: "startup") }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + fullResyncEvery, repeating: fullResyncEvery)
@@ -111,15 +114,29 @@ public final class Watcher {
         Log.line("watching \(paths.count) folder(s)")
     }
 
-    /// A file going away or changing its name is never our echo in any way worth
-    /// guessing about: whatever else is true, the mirror has to look.
+    /// The only flags that can mean "this is the mirror's own writing coming
+    /// back": a file's contents or its metadata changing. A file going away, being
+    /// renamed, a warning that events were dropped, a watched folder moving out
+    /// from under us — those have to be looked at, whatever the path.
     ///
-    /// Not `ItemCreated`. These flags accumulate over a path's history rather than
-    /// describing this one event, so a file the mirror wrote minutes ago still
-    /// arrives marked as created every time it is touched — testing for it would
-    /// mean never recognising our own writing at all.
-    private static let structural = FSEventStreamEventFlags(
-        kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed
+    /// Said as what is allowed rather than what is not, so a flag nobody here has
+    /// thought about wakes the watcher rather than being quietly ignored. The
+    /// first version of this listed what to refuse and forgot the dropped-events
+    /// warnings, which are precisely the ones that must never be missed.
+    ///
+    /// `ItemCreated` is on the list because these flags accumulate over a path's
+    /// history rather than describing the event in hand: a file written long ago
+    /// still arrives marked created every time it is touched, so refusing it would
+    /// mean never recognising anything.
+    private static let benign = FSEventStreamEventFlags(
+        kFSEventStreamEventFlagItemIsFile
+            | kFSEventStreamEventFlagItemIsDir
+            | kFSEventStreamEventFlagItemCreated
+            | kFSEventStreamEventFlagItemModified
+            | kFSEventStreamEventFlagItemInodeMetaMod
+            | kFSEventStreamEventFlagItemChangeOwner
+            | kFSEventStreamEventFlagItemXattrMod
+            | kFSEventStreamEventFlagItemFinderInfoMod
     )
 
     private func schedule(_ events: [(path: String, flags: FSEventStreamEventFlags)]) {
@@ -129,10 +146,11 @@ public final class Watcher {
         // find nothing — one real change, two passes, for as long as you keep
         // working. It is that echo when every event is a plain edit to a file this
         // process just wrote. Dragging one into Archive/ is a rename, so it wakes
-        // us however familiar the path looks.
+        // us however familiar the path looks, as does any warning that events were
+        // dropped and the folder needs rescanning.
         if !events.isEmpty, !selfWrites.isEmpty,
            events.allSatisfy({ event in
-               event.flags & Self.structural == 0
+               event.flags & ~Self.benign == 0
                    && selfWrites.contains(Mirror.normalize(URL(fileURLWithPath: event.path)).path)
            }) {
             selfWrites = []          // never swallow twice on one pass's account
@@ -178,7 +196,7 @@ public final class Watcher {
 
 public enum Log {
     private static let lock = NSLock()
-    private static var sinceCheck = 500       // so the first line checks, then every 500
+    private static var sinceCheck = 100       // so the first line checks, then every 100
 
     public static func line(_ msg: String) {
         let df = ISO8601DateFormatter()
@@ -203,7 +221,7 @@ public enum Log {
     private static func trimIfHuge() {
         lock.lock(); defer { lock.unlock() }
         sinceCheck += 1
-        guard sinceCheck >= 500 else { return }
+        guard sinceCheck >= 100 else { return }
         sinceCheck = 0
 
         guard fcntl(STDERR_FILENO, F_GETFL) & O_APPEND != 0 else { return }
@@ -221,7 +239,11 @@ public enum Log {
         defer { try? handle.close() }
         // Keep the end of it: what a log is for is the last thing that happened.
         try? handle.seek(toOffset: UInt64(size - keep))
-        guard let tail = try? handle.readToEnd() else { return }
+        guard var tail = try? handle.readToEnd() else { return }
+        // Begin at a line boundary rather than halfway through whatever was there.
+        if let firstBreak = tail.firstIndex(of: UInt8(ascii: "\n")) {
+            tail = tail[tail.index(after: firstBreak)...]
+        }
         try? handle.seek(toOffset: 0)
         try? handle.write(contentsOf: tail)
         try? handle.truncate(atOffset: UInt64(tail.count))
