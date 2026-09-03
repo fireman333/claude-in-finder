@@ -117,9 +117,17 @@ public enum SessionStore {
             : parent.deletingLastPathComponent()
         let dest = destDir.appendingPathComponent(url.lastPathComponent)
 
+        // Never delete what is already standing there. Two sessions can want the
+        // same file name in different folders — sharing a transcript gives them
+        // the same title, and Archive/ is a namespace of its own — and removing
+        // the occupant reads, a second later, as the user having thrown that
+        // session away, so the sync agent archives it. This move is only ever an
+        // optimisation: the record has already been changed, and the next pass
+        // puts the file where it belongs. Declining to move is free.
+        guard !fm.fileExists(atPath: dest.path) else { return nil }
+
         do {
             try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
-            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
             try fm.moveItem(at: url, to: dest)
             return dest
         } catch {

@@ -83,14 +83,34 @@ for pass in 3 4 5; do
     || fail "pass $pass was not a no-op: $OUT"
 done
 
-echo "4. a rename made in Finder is still obeyed"
+echo "4. archiving one, then bringing it back, does not archive the other"
+# The one left behind takes the freed-up unsuffixed name, so the returning file
+# lands on top of it. Deleting the occupant is read, a second later, as the user
+# throwing that session away.
+archived_of() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["isArchived"])' "$CCF_SESSIONS/local_$1.json"; }
+B_FILE="$(grep -l "local_$B" "$DIR"/*.claudesession | head -1)"
+"$CCFINDER" archive "$B_FILE" >/dev/null 2>&1
+"$CCFINDER" sync >/dev/null 2>&1
+[ -f "$DIR/Shared transcript.claudesession" ] || fail "the remaining session did not take the freed name"
+ARCHIVED_FILE="$(find "$DIR/Archive" -name '*.claudesession' | head -1)"
+[ -n "$ARCHIVED_FILE" ] || fail "nothing landed in Archive/"
+"$CCFINDER" unarchive "$ARCHIVED_FILE" >/dev/null 2>&1
+"$CCFINDER" sync >/dev/null 2>&1
+"$CCFINDER" sync >/dev/null 2>&1
+[ "$(archived_of "$A")" = "False" ] || fail "bringing B back archived A"
+[ "$(archived_of "$B")" = "False" ] || fail "B did not come back"
+[ "$(files)" = "2" ] || fail "a file was lost across the archive round trip: $(files) left"
+for id in "$A" "$B"; do
+  grep -lq "local_$id" "$DIR"/*.claudesession 2>/dev/null || fail "local_$id lost in the round trip"
+done
+echo "5. a rename made in Finder is still obeyed"
 CLEAN="$DIR/Shared transcript.claudesession"
 [ -f "$CLEAN" ] || fail "expected the newer session to hold the unsuffixed name"
 mv "$CLEAN" "$DIR/Renamed by hand.claudesession"
 "$CCFINDER" sync >/dev/null 2>&1
 [ "$(title_of "$B")" = "Renamed by hand" ] || fail "a real rename was ignored; title is '$(title_of "$B")'"
 
-echo "5. a file parked by a pass that died mid-swap is put back, not lost"
+echo "6. a file parked by a pass that died mid-swap is put back, not lost"
 SURVIVOR="$(find "$DIR" -maxdepth 1 -name '*.claudesession' ! -name '+ New Session*' | head -1)"
 mv "$SURVIVOR" "$DIR/.ccf-moving-stray.claudesession"
 "$CCFINDER" sync >/dev/null 2>&1
@@ -101,7 +121,7 @@ for id in "$A" "$B"; do
 done
 [ "$(title_of "$A")" = "Shared transcript" ] || fail "recovery rewrote A's title to '$(title_of "$A")'"
 
-echo "6. an unchanged transcript is not read again"
+echo "7. an unchanged transcript is not read again"
 rm -f "$CCF_SESSIONS/local_$B.json"
 write_session "$A" "Solo" 1788000000000
 "$CCFINDER" sync >/dev/null 2>&1
@@ -115,7 +135,7 @@ echo "$OUT" | grep -q "updated 0" || fail "an unchanged transcript was re-render
 grep -q "hi there" "$SOLO" || fail "the preview lost its content"
 [ "$(stat -f %m "$SOLO")" = "$BEFORE" ] || fail "the file was rewritten with nothing to change"
 
-echo "7. a changed transcript is picked up"
+echo "8. a changed transcript is picked up"
 msg assistant "a new turn" >> "$TRANSCRIPT"
 "$CCFINDER" sync >/dev/null 2>&1
 grep -q "a new turn" "$SOLO" || fail "an appended turn never reached the preview"
