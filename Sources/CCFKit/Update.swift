@@ -17,10 +17,9 @@ public enum AppVersion {
 
 /// Looking up the latest GitHub release and remembering the answer.
 ///
-/// It only ever *tells* you: nothing is downloaded and nothing is installed, so
-/// there is no update mechanism to get wrong. The app is ad-hoc signed and every
-/// install re-grants two permissions by hand, which is exactly the kind of thing
-/// that should not happen behind your back.
+/// Checking only ever *tells* you. Installing is `UpdateInstaller`, and runs
+/// only when you ask for it: the app is ad-hoc signed, an install restarts
+/// Finder, and that is not something to start behind your back.
 public enum Update {
 
     public static let repo = "fireman333/claude-in-finder"
@@ -38,11 +37,18 @@ public enum Update {
         public var url: String
         /// The release title, when it has one.
         public var name: String?
+        /// The release's DMG, and the SHA-256 GitHub records for it. Without
+        /// both the release can still be announced, just not installed.
+        public var dmg: String?
+        public var sha256: String?
 
-        public init(version: String, url: String, name: String? = nil) {
+        public init(version: String, url: String, name: String? = nil,
+                    dmg: String? = nil, sha256: String? = nil) {
             self.version = version
             self.url = url
             self.name = name
+            self.dmg = dmg
+            self.sha256 = sha256
         }
     }
 
@@ -194,7 +200,14 @@ public enum Update {
 
         let page = json["html_url"] as? String ?? releasesPage.absoluteString
         let name = (json["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return Release(version: normalised(tag), url: page, name: name)
+        // GitHub states each asset's digest as "sha256:<hex>".
+        let assets = json["assets"] as? [[String: Any]] ?? []
+        let image = assets.first { ($0["name"] as? String)?.hasSuffix(".dmg") == true }
+        let digest = (image?["digest"] as? String).flatMap { d -> String? in
+            d.hasPrefix("sha256:") ? String(d.dropFirst("sha256:".count)) : nil
+        }
+        return Release(version: normalised(tag), url: page, name: name,
+                       dmg: image?["browser_download_url"] as? String, sha256: digest)
     }
 
     // MARK: - Versions

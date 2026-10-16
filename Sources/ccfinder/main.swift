@@ -14,7 +14,7 @@ USAGE
   ccfinder unarchive <file...>                   bring archived sessions back
   ccfinder delete <file...> --yes                delete session records
   ccfinder config [layout|archive|on-delete] [v] show or change settings
-  ccfinder update [--if-due]                     check GitHub for a newer release
+  ccfinder update [--if-due | --install]         check GitHub for a newer release, or install it
   ccfinder doctor                                report what it can and cannot see
 
 Sessions are mirrored into a "Claude Sessions" folder inside the directory each
@@ -256,6 +256,16 @@ case "update":
             print("update available: \(release.version)   (this is \(AppVersion.current))")
             if let name = release.name { print(name) }
             print(release.url)
+            guard args.contains("--install") else { break }
+            do {
+                try UpdateInstaller.install(release)
+                print("installing \(release.version) — Finder will restart; the installer's output goes to")
+                print(UpdateInstaller.logURL.path)
+            } catch {
+                FileHandle.standardError.write(
+                    Data("could not install \(release.version): \(error.localizedDescription)\n".utf8))
+                exit(1)
+            }
         }
     } catch {
         FileHandle.standardError.write(

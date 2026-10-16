@@ -132,17 +132,23 @@ Two guards keep that from going wrong:
 
 With **Tell me when a new release is out** on, the background agent asks GitHub
 once a day whether this project has a newer release. If it does, the menu bar
-icon grows a dot, the menu gains an **Update to 0.11.0…** item, and the Settings
-window says so — with a **Release Notes…** button that opens the release page.
+icon grows a dot, the menu gains an **Update to 0.12.6…** item, and the Settings
+window says so — with **Release Notes…** and **Update…** buttons.
 
-**Nothing is downloaded and nothing is installed.** Updating is still `install.sh`,
-which is deliberate: the app is ad-hoc signed, so every update re-grants folder
-access and the Finder extension by hand, and that is not something to start
-behind your back. A check that cannot reach GitHub says so rather than reporting
-"up to date", and tries again in an hour instead of a day.
+**Nothing is installed until you click Update.** It asks first, because an
+install restarts Finder. Then it downloads the release's DMG from GitHub, checks
+it against the SHA-256 GitHub records for it and against the version it claims to
+be, and runs the same `install.sh` you would run by hand. Anything that does not
+check out stops there, before the installed app is touched, and offers the
+release page instead. The installer's output goes to
+`~/Library/Application Support/ClaudeInFinder/update.log`.
+
+A check that cannot reach GitHub says so rather than reporting "up to date", and
+tries again in an hour instead of a day.
 
 ```bash
 ccfinder update            # check now and print the answer
+ccfinder update --install  # check, and install the newer release if there is one
 ccfinder update --if-due   # what the agent runs: obeys the setting and the daily window
 ```
 

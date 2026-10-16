@@ -62,7 +62,7 @@ final class StatusItemController: NSObject {
 
         // Carried hidden rather than inserted and removed, so its position in the
         // menu never moves under the pointer.
-        let update = NSMenuItem(title: "", action: #selector(openRelease), keyEquivalent: "")
+        let update = NSMenuItem(title: "", action: #selector(offerUpdate), keyEquivalent: "")
         update.target = self
         update.tag = Tag.update
         update.isHidden = true
@@ -124,9 +124,12 @@ final class StatusItemController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc private func openRelease() {
-        let url = Update.pending.flatMap { URL(string: $0.url) } ?? Update.releasesPage
-        NSWorkspace.shared.open(url)
+    @objc private func offerUpdate() {
+        guard let release = Update.pending else {
+            NSWorkspace.shared.open(Update.releasesPage)
+            return
+        }
+        UpdatePrompt.offer(release)
     }
 
     @objc private func quit() {
@@ -141,7 +144,9 @@ extension StatusItemController: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         if let update = menu.item(withTag: Tag.update) {
             let release = Update.pending
-            update.title = release.map { "Update to \($0.version)…" } ?? ""
+            update.title = release.map {
+                UpdatePrompt.busy ? "Downloading \($0.version)…" : "Update to \($0.version)…"
+            } ?? ""
             update.isHidden = release == nil
         }
         refreshUpdateBadge()

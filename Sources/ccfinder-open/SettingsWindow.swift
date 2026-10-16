@@ -15,6 +15,7 @@ final class SettingsWindowController: NSWindowController {
     private var updateCheckBox: NSButton!
     private var updateLabel: NSTextField!
     private var checkNowButton: NSButton!
+    private var installButton: NSButton!
     private var statusLabel: NSTextField!
     private var accessLabel: NSTextField!
     private var extensionLabel: NSTextField!
@@ -89,15 +90,15 @@ final class SettingsWindowController: NSWindowController {
         newFileHelp.lineBreakMode = .byWordWrapping
         newFileHelp.usesSingleLineMode = false
 
-        // Updates are reported, never installed: the app is ad-hoc signed and an
-        // install re-grants two permissions by hand, so it is not something to do
+        // Updates are reported, and installed only when asked: the app is ad-hoc
+        // signed and an install restarts Finder, so it is not something to do
         // behind the user's back.
         let updatesTitle = label("Updates", size: 13, weight: .medium)
         updateCheckBox = NSButton(checkboxWithTitle: "Tell me when a new release is out",
                                   target: self, action: #selector(updateCheckChanged))
         let updatesHelp = label(
             "Looks at this project's GitHub releases once a day. A new version is "
-                + "shown here and in the menu bar; nothing is downloaded or installed for you.",
+                + "shown here and in the menu bar; it is installed only when you click Update.",
             size: 11, weight: .regular, secondary: true)
         updatesHelp.lineBreakMode = .byWordWrapping
         updatesHelp.usesSingleLineMode = false
@@ -108,7 +109,11 @@ final class SettingsWindowController: NSWindowController {
         let releaseButton = NSButton(title: "Release Notes…",
                                      target: self, action: #selector(openReleasePage))
         releaseButton.controlSize = .small
-        let updateRow = NSStackView(views: [updateLabel, NSView(), checkNowButton, releaseButton])
+        installButton = NSButton(title: "Update…", target: self, action: #selector(installClicked))
+        installButton.controlSize = .small
+        installButton.isHidden = true
+        let updateRow = NSStackView(views: [updateLabel, NSView(), checkNowButton, releaseButton,
+                                            installButton])
         updateRow.orientation = .horizontal
         updateRow.spacing = 8
 
@@ -283,6 +288,7 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func showUpdateState() {
+        installButton.isHidden = Update.pending == nil
         if let release = Update.pending {
             updateLabel.stringValue = "⬆ \(release.version) is available — you have \(AppVersion.current)"
         } else if let last = Update.loadState().lastCheck {
@@ -290,6 +296,10 @@ final class SettingsWindowController: NSWindowController {
         } else {
             updateLabel.stringValue = "Version \(AppVersion.current)"
         }
+    }
+
+    @objc private func installClicked() {
+        if let release = Update.pending { UpdatePrompt.offer(release) }
     }
 
     @objc private func openReleasePage() {
