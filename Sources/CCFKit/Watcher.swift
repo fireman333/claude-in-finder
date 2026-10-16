@@ -22,6 +22,16 @@ public final class Watcher {
     /// What the last pass wrote, so its own echo can be told from a real change.
     private var selfWrites: Set<String> = []
     private var verify: DispatchWorkItem?
+    /// Passes in a row, each woken by the file system, that went on to move
+    /// files. A rename settles in one or two; a run of them means the mirror is
+    /// answering its own moves, and every such pass reads every session on disk.
+    /// Once the run is long, waiting longer between passes caps what a loop
+    /// nobody has found yet can cost — one once ran for days at a pass every two
+    /// and a half seconds. Only moves count: a conversation in progress rewrites
+    /// its preview every few seconds, which is work, not a loop.
+    private var busyStreak = 0
+    private static let streakLimit = 5
+    private static let slowest: TimeInterval = 60
 
     public init(mirror: @escaping @Sendable () -> Mirror, debounce: TimeInterval = 1.5) {
         self.makeMirror = mirror
@@ -167,10 +177,26 @@ public final class Watcher {
         selfWrites = []
         verify?.cancel()
         verify = nil
+        // While slowed down, a pass already waiting is left to run when it was
+        // due. Pushing it back with every event would mean a steady stream of
+        // them — an active conversation — never got a pass at all.
+        if busyStreak >= Self.streakLimit, pending != nil { return }
         pending?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.sync(reason: "fsevent") }
+        // Forgotten as it starts: a finished item never reads as cancelled, so
+        // one left in `pending` would look forever like a pass still to come.
+        let work = DispatchWorkItem { [weak self] in
+            self?.pending = nil
+            self?.sync(reason: "fsevent")
+        }
         pending = work
-        queue.asyncAfter(deadline: .now() + debounce, execute: work)
+        queue.asyncAfter(deadline: .now() + delay(), execute: work)
+    }
+
+    /// The usual debounce, doubling for each pass past the limit of a busy run.
+    private func delay() -> TimeInterval {
+        guard busyStreak >= Self.streakLimit else { return debounce }
+        let doublings = Double(min(busyStreak - Self.streakLimit + 1, 10))
+        return min(debounce * pow(2, doublings), Self.slowest)
     }
 
     private func sync(reason: String) {
@@ -179,8 +205,17 @@ public final class Watcher {
             let s = try mirror.reconcile()
             // Every pass is logged when asked to be verbose, changes or not: how
             // many passes one change costs is otherwise invisible.
-            if s.created + s.renamed + s.updated + s.removed > 0 || mirror.verbose {
+            let changed = s.created + s.renamed + s.updated + s.removed > 0
+            if changed || mirror.verbose {
                 Log.line("[\(reason)] +\(s.created) ~\(s.updated) ↻\(s.renamed) -\(s.removed)")
+            }
+            if s.renamed == 0 {
+                busyStreak = 0
+            } else if reason == "fsevent" {
+                busyStreak += 1
+                if busyStreak == Self.streakLimit {
+                    Log.line("\(busyStreak) passes in a row each moved files; slowing down")
+                }
             }
             selfWrites = s.selfWrites
             // New project folders appear as you work; follow them.

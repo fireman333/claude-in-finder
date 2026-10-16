@@ -31,7 +31,9 @@ public struct Mirror {
     }
 
     struct Index: Codable {
-        var version: Int = 2
+        /// 3: entries written by a build that could overwrite a file of one
+        /// session with another's have been checked once — see `reconcile`.
+        var version: Int = 3
         var entries: [String: Entry] = [:]   // keyed by desktop session id
         /// Folders where the user deleted the "+ New Session" file. Putting it
         /// back there would be arguing with them.
@@ -178,13 +180,40 @@ public struct Mirror {
         // was the single most expensive thing a pass did.
         let scan = scanMirrorDetailed(sessions: sessions)
         adoptOrphans(into: &index, found: scan.found)
+
+        // Builds before index v3 could write one session's page over another's
+        // file when a new session arrived under an old one's title. The session
+        // that lost its file is not one the user deleted, yet it looks exactly
+        // like one, and the pass below would archive it. Once, on upgrading,
+        // forget where such files were: the sessions are mirrored afresh. A file
+        // genuinely deleted while the old build was running comes back, which
+        // is a far smaller wrong than archiving conversations nobody touched.
+        //
+        // Missing is judged by content, not by the path: what stands at the
+        // recorded path is usually the very file that took this one's place,
+        // and it moves away later in the same pass.
+        if index.version < 3 {
+            for session in sessions {
+                guard let entry = index.entries[session.desktopID],
+                      scan.found[session.desktopID] == nil,
+                      Self.folderAnswered(of: entry, in: scan)
+                else { continue }
+                index.entries.removeValue(forKey: session.desktopID)
+                Log.line("re-mirroring \(session.title): its file was lost before this version")
+            }
+            index.version = 3
+        }
         let transcripts = Discovery.transcriptIndex()
 
         let fallbackNames = fallbackFolderNames(for: sessions)
         var out = Outcome()
         let writes = WriteLog()
         var live = Set<String>()
+        /// Names taken this pass, as the disk compares them — see `slot`.
         var usedPaths = Set<String>()
+        /// Sessions this pass has already placed; a file of theirs set aside
+        /// now would never be collected.
+        var visited = Set<String>()
         var roots = Set<URL>()
 
         // Newest first so that, on a filename clash, the session you touched most
@@ -192,10 +221,26 @@ public struct Mirror {
         // `scan` is frozen: it is the disk as the user left it, and the only
         // thing a rename in Finder can be read from. `locations` tracks where the
         // files are as this pass shuffles them, which is a different question.
-        var locations = scan.found
+        var locations = scan.found       // values always normalized
+        // The same, the other way round: whose file stands at a path. Asked of
+        // every session, so it has to be a lookup — searching `locations` each
+        // time made a pass with a thousand sessions take a minute.
+        var holders: [String: String] = [:]
+        for (id, url) in locations { holders[Self.slot(url)] = id }
+        func place(_ id: String, at url: URL) {
+            if let old = locations[id], holders[Self.slot(old)] == id { holders[Self.slot(old)] = nil }
+            locations[id] = url
+            holders[Self.slot(url)] = id
+        }
         // Only a session this pass will reach can collect a file we set aside
         // for it. Anything else would be parked and left hidden indefinitely.
         let processing = Set(sessions.map(\.desktopID))
+        // Every suffix that can be handed out under each name — see
+        // `withoutDisambiguator`.
+        var stemsByName: [String: Set<String>] = [:]
+        for s in sessions {
+            stemsByName[Self.sanitize(s.title), default: []].insert(Self.stem(of: s.desktopID))
+        }
         var deleted = Set<String>()
 
         for var session in sessions.sorted(by: { $0.sortDate > $1.sortDate }) {
@@ -240,7 +285,8 @@ public struct Mirror {
                 // Skip only the write-back — the session still needs the rest of
                 // this pass, which is what puts a parked file back.
                 if !renamed.isEmpty, !renamed.hasPrefix(Self.parkingPrefix),
-                   Self.withoutDisambiguator(renamed, for: session) != Self.sanitize(session.title) {
+                   Self.withoutDisambiguator(renamed, stems: stemsByName[Self.sanitize(session.title)] ?? [])
+                       != Self.sanitize(session.title) {
                     try? SessionStore.rename(desktopID: session.desktopID, to: renamed)
                     session.title = renamed
                     index.entries[session.desktopID]?.path = current.path
@@ -277,11 +323,11 @@ public struct Mirror {
             let root = self.root(for: session, fallbackNames: fallbackNames)
             var name = Self.sanitize(session.title)
             var dest = root.appendingPathComponent("\(name).claudesession")
-            if usedPaths.contains(dest.path) {
+            if usedPaths.contains(Self.slot(dest)) {
                 name = Self.disambiguated(name, for: session, avoiding: usedPaths, in: root)
                 dest = root.appendingPathComponent("\(name).claudesession")
             }
-            usedPaths.insert(dest.path)
+            usedPaths.insert(Self.slot(dest))
 
             try fm.createDirectory(at: root, withIntermediateDirectories: true)
             roots.insert(root)
@@ -293,8 +339,54 @@ public struct Mirror {
             // Where this session's file actually is, according to the file itself.
             // The index is a step behind whenever two sessions trade names within
             // one pass, and following it then moves somebody else's file.
-            let oldURL = locations[session.desktopID]
-                ?? previous.map { URL(fileURLWithPath: $0.path) }
+            //
+            // The index is only a fallback for a file we could not identify, and
+            // never when another session's file is standing at that path: a
+            // session whose own file had been lost used to pick up its
+            // neighbour's from there, carry it off under its own name, and the
+            // two then traded that one file every pass, forever.
+            let oldURL: URL? = locations[session.desktopID] ?? previous.flatMap { entry in
+                let path = Self.normalize(URL(fileURLWithPath: entry.path)).path
+                let taken = holders[Self.slot(URL(fileURLWithPath: path))].map { $0 != session.desktopID } ?? false
+                return taken ? nil : URL(fileURLWithPath: entry.path)
+            }
+
+            /// Another session's file standing where this one goes, if any.
+            func occupant() -> String? {
+                guard let holder = holders[Self.slot(Self.normalize(dest))],
+                      holder != session.desktopID,
+                      fm.fileExists(atPath: dest.path)
+                else { return nil }
+                return holder
+            }
+
+            /// Sets an occupant's file aside for its own turn in this pass to
+            /// collect. False when it cannot be — the occupant is a session this
+            /// pass will not reach, or has reached already and so would never
+            /// come back for it, or there is nowhere free to park it.
+            func park(_ id: String) -> Bool {
+                guard processing.contains(id), !visited.contains(id),
+                      let parked = Self.freeParkingPath(for: id, in: dest.deletingLastPathComponent()),
+                      (try? fm.moveItem(at: dest, to: parked)) != nil
+                else { return false }
+                place(id, at: Self.normalize(parked))
+                return true
+            }
+
+            /// Clears `dest` of another session's file: parks it for its own turn
+            /// when it can, and otherwise settles for the next free name rather
+            /// than wait on a file that is not going to move — or leave one this
+            /// pass already set aside out of sight for good. False only when the
+            /// free name is somehow taken too.
+            func makeWay() -> Bool {
+                guard let holder = occupant() else { return true }
+                if park(holder) { return true }
+                name = Self.disambiguated(Self.sanitize(session.title), for: session,
+                                          avoiding: usedPaths, in: root)
+                dest = root.appendingPathComponent("\(name).claudesession")
+                usedPaths.insert(Self.slot(dest))
+                return occupant() == nil
+            }
 
             // Rendering a session means reading and parsing its entire transcript,
             // and with hundreds of sessions on disk that is very nearly the whole
@@ -327,30 +419,18 @@ public struct Mirror {
                 // again, and deleting whatever is in the way then destroys a file
                 // that was only passing through. Park it instead: its own turn in
                 // this pass will collect it from where we left it.
-                var clear = !fm.fileExists(atPath: dest.path)
-                if !clear {
-                    let occupant = locations.first {
-                        $0.key != session.desktopID
-                            && Self.normalize($0.value).path == Self.normalize(dest).path
-                    }
-                    if let occupant {
-                        // Only a session this pass will reach can collect a file we
-                        // set aside for it. One it will not reach is left exactly
-                        // where it is and waited on — it is somebody's conversation,
-                        // and `--no-prune` promises never to delete a mirrored file.
-                        if processing.contains(occupant.key),
-                           let parked = Self.freeParkingPath(for: occupant.key,
-                                                             in: dest.deletingLastPathComponent()),
-                           (try? fm.moveItem(at: dest, to: parked)) != nil {
-                            locations[occupant.key] = Self.normalize(parked)
-                            clear = true
-                        }
-                    } else {
-                        // No session claims this file: a leftover, or one whose head
-                        // we could not read. Nothing tracks it, so nothing loses it.
-                        try? fm.removeItem(at: dest)
-                        clear = !fm.fileExists(atPath: dest.path)
-                    }
+                //
+                // Only a session this pass will reach can collect a file we set
+                // aside for it. One it will not reach is left exactly where it is —
+                // it is somebody's conversation, and `--no-prune` promises never to
+                // delete a mirrored file — and this one takes another name.
+                var clear = makeWay()
+                let arrived = Self.normalize(oldURL).path == Self.normalize(dest).path
+                if clear, !arrived, fm.fileExists(atPath: dest.path) {
+                    // No session claims this file: a leftover, or one whose head
+                    // we could not read. Nothing tracks it, so nothing loses it.
+                    try? fm.removeItem(at: dest)
+                    clear = !fm.fileExists(atPath: dest.path)
                 }
                 // Could not clear the way. Leave this session alone entirely and
                 // try again next pass — falling through would write its page over
@@ -361,7 +441,8 @@ public struct Mirror {
                     log("\(dest.lastPathComponent) is occupied; leaving \(oldURL.lastPathComponent) alone")
                     continue
                 }
-                do {
+                // The name it settled for may be the one it already has.
+                if !arrived { do {
                     try fm.moveItem(at: oldURL, to: dest)
                     out.renamed += 1
                     log("moved: \(oldURL.path) → \(dest.path)")
@@ -371,9 +452,19 @@ public struct Mirror {
                     // should not take the rest of the sync down with it. `dest` was
                     // clear, so nothing of anyone else's is at stake.
                     log("move failed (\(error.localizedDescription)); rewriting instead")
-                }
+                } }
+            } else if !makeWay() {
+                // Nothing of ours to move — a session that is new, or whose file
+                // was lost — yet someone else's file stands at the name. Writing
+                // here would put this page over their conversation, which is
+                // exactly what happened each time a scheduled task started a new
+                // session under an old one's title: the old file was overwritten,
+                // and the two sessions fought over the survivor from then on.
+                log("\(dest.lastPathComponent) is occupied; waiting to write \(session.desktopID)")
+                continue
             }
-            locations[session.desktopID] = Self.normalize(dest)
+            place(session.desktopID, at: Self.normalize(dest))
+            visited.insert(session.desktopID)
 
             // What the file on disk actually holds, which is not the same as what
             // this pass rendered — see the incomplete case below.
@@ -699,7 +790,14 @@ public struct Mirror {
                           scan: (found: [String: URL], listed: Set<String>)) -> Bool {
         guard scan.found[id] == nil else { return false }
         guard !fm.fileExists(atPath: entry.path) else { return false }
-        let parent = Self.normalize(URL(fileURLWithPath: entry.path).deletingLastPathComponent()).path
+        return Self.folderAnswered(of: entry, in: scan)
+    }
+
+    /// Whether the folder an entry's file lived in was read this pass. One that
+    /// was not also looks empty, and must never be taken for one emptied.
+    private static func folderAnswered(of entry: Entry,
+                                       in scan: (found: [String: URL], listed: Set<String>)) -> Bool {
+        let parent = normalize(URL(fileURLWithPath: entry.path).deletingLastPathComponent()).path
         return scan.listed.contains(parent)
     }
 
@@ -956,10 +1054,10 @@ public struct Mirror {
     /// Finder.
     private static func disambiguated(_ name: String, for session: Session,
                                       avoiding used: Set<String>, in root: URL) -> String {
-        let stem = String(bareUUID(session.desktopID).prefix(6))
+        let stem = stem(of: session.desktopID)
         var candidate = "\(name) · \(stem)"
         var n = 2
-        while used.contains(root.appendingPathComponent("\(candidate).claudesession").path) {
+        while used.contains(slot(root.appendingPathComponent("\(candidate).claudesession"))) {
             candidate = "\(name) · \(stem)-\(n)"
             n += 1
         }
@@ -992,22 +1090,36 @@ public struct Mirror {
         id.hasPrefix("local_") ? String(id.dropFirst("local_".count)) : id
     }
 
-    /// Removes the suffix `disambiguated` would have given *this* session, so a
-    /// name we chose is not mistaken for one the user typed.
+    /// Removes a suffix `disambiguated` hands out under this name, so a name we
+    /// chose is not mistaken for one the user typed.
     ///
-    /// Matched against that one session's own stem rather than against the shape
-    /// of a stem: digits are hex, so anything looser silently swallows a rename
+    /// Any of the stems of sessions sharing the name, not only the session's own:
+    /// a file can reach a session under a sibling's suffix through the mirror
+    /// swapping files, never through the user — and writing that back as a title
+    /// is what left sessions named after one another, each pass then renaming the
+    /// other's file in turn. Still matched against real stems rather than the
+    /// shape of one: digits are hex, so anything looser silently swallows a rename
     /// to something like "Sprint · 202601" and never tells Claude about it.
-    private static func withoutDisambiguator(_ name: String, for session: Session) -> String {
+    private static func withoutDisambiguator(_ name: String, stems: Set<String>) -> String {
         guard let sep = name.range(of: " · ", options: .backwards) else { return name }
         let tail = String(name[sep.upperBound...])
-        let stem = String(bareUUID(session.desktopID).prefix(6))
-        let numbered = tail.hasPrefix("\(stem)-")
-            && tail.count > stem.count + 1
-            && tail.dropFirst(stem.count + 1).allSatisfy(\.isNumber)
-        guard tail == stem || numbered else { return name }
+        guard stems.contains(where: { isSuffix(tail, of: $0) }) else { return name }
         return String(name[..<sep.lowerBound])
     }
+
+    /// The six characters of a session's id that `disambiguated` puts in a name.
+    static func stem(of desktopID: String) -> String {
+        String(bareUUID(desktopID).prefix(6))
+    }
+
+    /// `stem` or `stem-<n>`: exactly what `disambiguated` appends.
+    private static func isSuffix(_ tail: String, of stem: String) -> Bool {
+        if tail == stem { return true }
+        return tail.hasPrefix("\(stem)-")
+            && tail.count > stem.count + 1
+            && tail.dropFirst(stem.count + 1).allSatisfy(\.isNumber)
+    }
+
 
     /// Everything `Render.html` reads, boiled down to one comparable string: the
     /// session fields that reach the page, plus the transcript's identity, size
@@ -1048,6 +1160,19 @@ public struct Mirror {
         if s.hasPrefix(".") { s = "_" + s.dropFirst() }
         if s.count > 80 { s = String(s.prefix(80)).trimmingCharacters(in: .whitespaces) + "…" }
         return s.isEmpty ? "Untitled session" : s
+    }
+
+    /// A path as the disk tells names apart. APFS and HFS+ as macOS formats them
+    /// ignore case and Unicode composition, so "Daily" and "daily", or an accent
+    /// stored either way, are one file. Comparing them as different strings
+    /// handed two sessions what was really the same name, and each pass then
+    /// moved one file out of the other's way.
+    ///
+    /// Folded rather than lowercased: lowercasing keeps a final sigma apart from
+    /// a medial one, which the disk does not. Folding a little more than the disk
+    /// does only costs a suffix; folding less loses a file.
+    static func slot(_ url: URL) -> String {
+        url.path.precomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil)
     }
 
     /// `/var` and `/private/var` name the same directory. FileManager hands back
