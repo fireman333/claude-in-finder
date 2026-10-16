@@ -136,8 +136,8 @@ Installed.
   Agent      $LABEL  — syncing in the background
 
 Open ~/Claude Sessions in Finder. Double-click a session to reopen it,
-press space to preview it, or right-click a folder → Services →
-"New Claude Session Here".
+press space to preview it, or right-click a folder → "New Claude
+Session Here".
 
 Run 'ccfinder doctor' if something looks wrong.
 DONE

@@ -77,10 +77,9 @@ qlmanage -r cache && killall Finder Dock
 
 ## Settings
 
-Three ways in, whichever is nearest:
+Two ways in, whichever is nearest:
 
 - the **menu bar icon** → Settings…
-- right-click any folder → Services → **Claude in Finder Settings…**
 - open the app from Spotlight
 
 | Setting | Choices |

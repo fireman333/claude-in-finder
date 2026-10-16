@@ -50,7 +50,7 @@ Claude in Finder $VERSION
   • 按空白鍵 → Quick Look 直接預覽對話內容
   • 在 Claude 裡改 session 名稱 → 檔名會自動跟著改
   • 雙擊「+ New Session」→ 在那個專案開新對話
-  • 對任何資料夾按右鍵 → 服務 → New Claude Session Here
+  • 對任何資料夾、或視窗空白處按右鍵 → New Claude Session Here
 
 有問題就跑：
 
@@ -87,7 +87,7 @@ inside your home directory:
 
 Then open ~/Claude Sessions. Double-click a session to reopen it in
 Claude Code desktop, press space to preview it, right-click any folder
-and choose Services > "New Claude Session Here".
+(or the empty space in a window) and choose "New Claude Session Here".
 
 Diagnose with:  ccfinder doctor
 Uninstall with: bash "/Volumes/$VOL_NAME/uninstall.sh"
